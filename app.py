@@ -428,23 +428,6 @@ def home():
             <h1>통합 검색 서버</h1>
             <p>통합 검색 서버가 실행 중입니다. Pinecone 데이터베이스 검색 및 Gemini LLM을 활용한 응답을 제공합니다.</p>
             
-            <h2>사용 방법</h2>
-            <p>다음과 같이 /query 엔드포인트로 POST 요청을 보내세요:</p>
-            
-            <pre>
-    curl -X POST \\
-      http://localhost:5000/query \\
-      -H 'Content-Type: application/json' \\
-      -d '{
-        "query": "서울시 고용 정보를 알려주세요"
-    }'
-            </pre>
-            
-            <h2>엔드포인트</h2>
-            <ul>
-                <li><strong>/query</strong> - 질문을 처리하는 메인 엔드포인트</li>
-                <li><strong>/health</strong> - 서버 상태 확인용 엔드포인트</li>
-            </ul>
         </div>
     </body>
     </html>
