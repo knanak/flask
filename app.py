@@ -643,15 +643,6 @@ def home():
             <p>통합 검색 서버가 실행 중입니다. Pinecone 데이터베이스 검색 및 Gemini LLM을 활용한 응답을 제공합니다.</p>
             <p>지역 기반 지능형 검색 기능이 적용되어 있습니다. 특정 구를 언급하면 해당 구와 관련성 높은 인접 구들의 정보도 함께 검색합니다.</p>
             
-            <h2>API 사용 방법</h2>
-            <pre>
-POST /query
-Content-Type: application/json
-
-{
-    "query": "강남구 노인 문화교실"
-}
-            </pre>
         </div>
     </body>
     </html>
