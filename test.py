@@ -194,7 +194,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         # Generate response using Gemini
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -275,7 +275,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
 """
             
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             return {
@@ -353,7 +353,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
 구 이름만 답변해 주세요 (예: "강남구"). 없으면 "없음"이라고만 답변하세요.
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -397,7 +397,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
 시·군 이름만 답변해 주세요 (예: "수원시", "연천군"). 없으면 "없음"이라고만 답변하세요.
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -479,7 +479,7 @@ JSON 형식으로 응답해 주세요. 선택한 구 이름만 배열로 제공�
 예시: ["구이름1", "구이름2", "구이름3"]
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -514,7 +514,7 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
 예시: ["시군이름1", "시군이름2", "시군이름3"]
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-2.0-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
