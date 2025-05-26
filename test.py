@@ -346,6 +346,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
     def _extract_seoul_district(self, query):
         """
         서울시 구 이름을 추출합니다.
+        동 이름이 포함된 경우, 해당 동이 속한 구를 찾습니다.
         """
         all_districts = list(SEOUL_DISTRICT_NEIGHBORS.keys())
         
@@ -358,10 +359,47 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             if match in all_districts:
                 return match
         
-        # Gemini를 통한 구 추출 시도
+        # '동' 이름이 포함된 경우 확인
+        dong_pattern = r'(\w+동)'
+        dong_matches = re.findall(dong_pattern, query)
+        
+        if dong_matches and self.gemini_client:
+            # 동 이름이 있는 경우, 해당 동이 속한 구를 찾기
+            dong_name = dong_matches[0]
+            try:
+                prompt = f"""
+다음 동(洞) 이름이 서울시의 어느 구에 속하는지 알려주세요.
+동 이름: {dong_name}
+
+### 가능한 서울시 구 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+해당 동이 속한 구 이름만 답변해 주세요 (예: "강남구", "종로구").
+만약 서울시에 속하지 않거나 찾을 수 없으면 "없음"이라고 답변하세요.
+
+### 참고 정보:
+- 삼성동은 강남구에 속합니다
+- 명동은 중구에 속합니다
+- 신촌동은 서대문구에 속합니다
+"""
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_district = response.text.strip()
+                if extracted_district in all_districts:
+                    print(f"'{dong_name}'이(가) 속한 구: {extracted_district}")
+                    return extracted_district
+            except Exception as e:
+                print(f"동 이름으로 구 추출 중 오류 발생: {str(e)}")
+        
+        # Gemini를 통한 일반적인 구 추출 시도
         try:
             prompt = f"""
 다음 사용자 질문에서 서울시 행정구역(구 이름)을 추출해주세요.
+동(洞) 이름이 있다면 해당 동이 속한 구를 찾아주세요.
 만약 특정 구 이름이 없다면 "없음"이라고 답해주세요.
 
 ### 사용자 질문:
@@ -390,6 +428,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
     def _extract_gyeonggi_district(self, query):
         """
         경기도 시·군 이름을 추출합니다.
+        동 이름이 포함된 경우, 해당 동이 속한 시·군을 찾습니다.
         """
         all_districts = list(GYEONGGI_DISTRICT_NEIGHBORS.keys())
         
@@ -402,10 +441,47 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             if match in all_districts:
                 return match
         
-        # Gemini를 통한 시·군 추출 시도
+        # '동' 이름이 포함된 경우 확인
+        dong_pattern = r'(\w+동)'
+        dong_matches = re.findall(dong_pattern, query)
+        
+        if dong_matches and self.gemini_client:
+            # 동 이름이 있는 경우, 해당 동이 속한 시·군을 찾기
+            dong_name = dong_matches[0]
+            try:
+                prompt = f"""
+다음 동(洞) 이름이 경기도의 어느 시·군에 속하는지 알려주세요.
+동 이름: {dong_name}
+
+### 가능한 경기도 시·군 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+해당 동이 속한 시·군 이름만 답변해 주세요 (예: "수원시", "평택시").
+만약 경기도에 속하지 않거나 찾을 수 없으면 "없음"이라고 답변하세요.
+
+### 참고 정보:
+- 지제동은 평택시에 속합니다
+- 정자동은 성남시에 속합니다
+- 행신동은 고양시에 속합니다
+"""
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_district = response.text.strip()
+                if extracted_district in all_districts:
+                    print(f"'{dong_name}'이(가) 속한 시·군: {extracted_district}")
+                    return extracted_district
+            except Exception as e:
+                print(f"동 이름으로 시·군 추출 중 오류 발생: {str(e)}")
+        
+        # Gemini를 통한 일반적인 시·군 추출 시도
         try:
             prompt = f"""
 다음 사용자 질문에서 경기도 행정구역(시 또는 군 이름)을 추출해주세요.
+동(洞) 이름이 있다면 해당 동이 속한 시·군을 찾아주세요.
 만약 특정 시·군 이름이 없다면 "없음"이라고 답해주세요.
 
 ### 사용자 질문:
@@ -621,18 +697,18 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
                     print(f"✅ {target_district}에서 {len(first_hits)}개 결과 발견")
                     
                     # 결과가 8개 이상이면 바로 반환
-                    if len(all_results) >= rerank_top_n:
+                    if len(all_results) >= 8:
                         print(f"📊 충분한 결과 확보 (총 {len(all_results)}개)")
                         return self._format_search_response(
                             namespace, all_results, target_district, searched_districts, districts_to_search
                         )
             
             # 2단계: 결과가 8개 미만이면 인접 지역에서 추가 검색
-            if len(all_results) < rerank_top_n and districts_to_search:
+            if len(all_results) < 8 and districts_to_search:
                 remaining_districts = [d for d in districts_to_search if d != target_district]
                 
                 if remaining_districts:
-                    needed_results = rerank_top_n - len(all_results)
+                    needed_results = 8 - len(all_results)
                     print(f"\n🔍 2단계: 추가 {needed_results}개 결과가 필요함. 인접 지역에서 검색...")
                     print(f"검색할 인접 지역: {', '.join(remaining_districts)}")
                     
