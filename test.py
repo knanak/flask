@@ -6,6 +6,7 @@ import re
 import sys
 from threading import Thread
 from dotenv import load_dotenv
+import random
 
 # UTF-8 인코딩 설정
 if hasattr(sys.stdout, 'reconfigure'):
@@ -101,6 +102,7 @@ SEOUL_DISTRICT_NEIGHBORS = {
     '중랑구': ['노원구', '광진구', '동대문구', '성북구', '강북구']
 }
 
+
 # 경기도 시·군 간 인접 정보 (각 시·군과 인접한 시·군 목록)
 GYEONGGI_DISTRICT_NEIGHBORS = {
     # 북부 지역
@@ -146,6 +148,25 @@ GYEONGGI_DISTRICT_NEIGHBORS = {
     '안성시': ['용인시', '화성시', '평택시', '이천시', '천안시', '음성군'],
     '이천시': ['광주시', '여주시', '용인시', '안성시', '충주시', '음성군'],
 }
+
+
+
+# multi_query_category 정의 (파일 상단, NAMESPACE_INFO 아래에 추가)
+MULTI_QUERY_CATEGORY = {
+    '문화': '{user_city} {user_district}의 문화 정보',
+    '정책': '{user_city} {user_district}의 정책 정보',
+    '쇼핑': '{user_city} {user_district}의 쇼핑 정보, 쇼핑 특가',
+    '일자리': '{user_city} {user_district}의 시니어 일자리 정보',
+    '복지시설': '{user_city} {user_district}의 노인복지시설 정보',
+    '건강': '{user_city} {user_district}의 시니어 건강 프로그램',
+    '교육': '{user_city} {user_district}의 평생교육 프로그램',
+    '여가': '{user_city} {user_district}의 시니어 여가 활동',
+    '의료': '{user_city} {user_district}의 의료 서비스 안내',
+    '교통': '{user_city} {user_district}의 시니어 교통 할인 정보',
+    '주거': '{user_city} {user_district}의 시니어 주거 지원 정보',
+    '식사': '{user_city} {user_district}의 경로식당 및 도시락 배달 서비스'
+}
+
 
 class QueryProcessor:
     def __init__(self, gemini_client, pinecone_client, dense_index_name="dense-for-hybrid-py"):
@@ -531,9 +552,10 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
         
         return self._get_gyeonggi_nearby_districts(target_district, max_neighbors)
     
-    def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=3):
+    def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=8):
         """
         Search Pinecone vector database using the specified namespace.
+        추출된 지역을 우선적으로 검색하고, 결과가 8개 미만일 경우 인접 지역에서 추가 검색합니다.
         """
         if self.dense_index is None:
             return {
@@ -568,53 +590,81 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
             except UnicodeEncodeError:
                 print("검색할 지역 목록: [encoding error]")
             
-            # 검색 필터 구성
-            search_filter = None
-            if districts_to_search:
-                search_filter = {"Category": {"$in": districts_to_search}}
+            # 1단계: 추출된 지역만으로 우선 검색
+            all_results = []
+            searched_districts = []
             
-            # 검색 실행
-            search_params = {
-                "inputs": {"text": query},
-                "top_k": top_k
-            }
+            if target_district:
+                print(f"\n🔍 1단계: {target_district}에서 우선 검색...")
+                
+                search_params = {
+                    "inputs": {"text": query},
+                    "top_k": top_k,
+                    "filter": {"Category": target_district}
+                }
+                
+                first_search = self.dense_index.search(
+                    namespace=namespace,
+                    query=search_params,
+                    fields=["Title", "Category", "chunk_text"],
+                    rerank={
+                        "model": "bge-reranker-v2-m3",
+                        "top_n": rerank_top_n,
+                        "rank_fields": ["chunk_text"]
+                    },
+                )
+                
+                if first_search and 'result' in first_search and 'hits' in first_search['result']:
+                    first_hits = first_search['result']['hits']
+                    all_results.extend(first_hits)
+                    searched_districts.append(target_district)
+                    print(f"✅ {target_district}에서 {len(first_hits)}개 결과 발견")
+                    
+                    # 결과가 8개 이상이면 바로 반환
+                    if len(all_results) >= rerank_top_n:
+                        print(f"📊 충분한 결과 확보 (총 {len(all_results)}개)")
+                        return self._format_search_response(
+                            namespace, all_results, target_district, searched_districts, districts_to_search
+                        )
             
-            # 필터가 있는 경우에만 추가
-            if search_filter:
-                search_params["filter"] = search_filter
+            # 2단계: 결과가 8개 미만이면 인접 지역에서 추가 검색
+            if len(all_results) < rerank_top_n and districts_to_search:
+                remaining_districts = [d for d in districts_to_search if d != target_district]
+                
+                if remaining_districts:
+                    needed_results = rerank_top_n - len(all_results)
+                    print(f"\n🔍 2단계: 추가 {needed_results}개 결과가 필요함. 인접 지역에서 검색...")
+                    print(f"검색할 인접 지역: {', '.join(remaining_districts)}")
+                    
+                    search_params = {
+                        "inputs": {"text": query},
+                        "top_k": top_k,
+                        "filter": {"Category": {"$in": remaining_districts}}
+                    }
+                    
+                    second_search = self.dense_index.search(
+                        namespace=namespace,
+                        query=search_params,
+                        fields=["Title", "Category", "chunk_text"],
+                        rerank={
+                            "model": "bge-reranker-v2-m3",
+                            "top_n": needed_results,
+                            "rank_fields": ["chunk_text"]
+                        },
+                    )
+                    
+                    if second_search and 'result' in second_search and 'hits' in second_search['result']:
+                        second_hits = second_search['result']['hits']
+                        all_results.extend(second_hits)
+                        searched_districts.extend(remaining_districts)
+                        print(f"✅ 인접 지역에서 {len(second_hits)}개 추가 결과 발견")
             
-            ranked_results = self.dense_index.search(
-                namespace=namespace,
-                query=search_params,
-                fields=["Title", "Category", "chunk_text"],
-                rerank={
-                    "model": "bge-reranker-v2-m3",
-                    "top_n": rerank_top_n,
-                    "rank_fields": ["chunk_text"]
-                },
+            # 최종 결과 반환
+            print(f"\n📊 최종 검색 결과: 총 {len(all_results)}개")
+            return self._format_search_response(
+                namespace, all_results, target_district, searched_districts, districts_to_search
             )
             
-            # 검색 정보를 디버그 정보에 추가
-            search_info = {
-                "target_district": target_district,
-                "districts_searched": districts_to_search,
-                "region_type": "seoul" if self.is_seoul_namespace(namespace) else "gyeonggi" if self.is_gyeonggi_namespace(namespace) else "other"
-            }
-            
-            # 결과 확인을 위한 디버그 정보 추가 (인코딩 안전)
-            try:
-                result_count = len(ranked_results.get('result', {}).get('hits', [])) if ranked_results else 0
-                print(f"검색 결과: {result_count}개 항목")
-            except UnicodeEncodeError:
-                print("검색 결과: [encoding error]")
-            
-            return {
-                "source": "pinecone",
-                "namespace": namespace,
-                "results": ranked_results,
-                "status": "success",
-                "search_info": search_info
-            }
         except Exception as e:
             try:
                 print(f"Pinecone search error: {str(e)}")
@@ -627,6 +677,80 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
                 "status": "error",
                 "error": str(e)
             }
+    
+    def _format_search_response(self, namespace, hits, target_district, searched_districts, all_districts):
+        """
+        검색 결과를 포맷팅하여 반환합니다.
+        """
+        # 검색 정보
+        search_info = {
+            "target_district": target_district,
+            "districts_searched": searched_districts,
+            "districts_available": all_districts,
+            "region_type": "seoul" if self.is_seoul_namespace(namespace) else "gyeonggi" if self.is_gyeonggi_namespace(namespace) else "other"
+        }
+        
+        # 상세한 검색 결과 출력
+        if hits:
+            result_count = len(hits)
+            districts_str = ', '.join(searched_districts) if searched_districts else 'None'
+            
+            print(f"\n{'='*60}")
+            print(f"🔍 검색 결과: 총 {result_count}개 항목")
+            print(f"📍 대상 지역: {target_district if target_district else 'None'}")
+            print(f"📂 네임스페이스: {namespace}")
+            print(f"🏘️ 실제 검색된 지역: {districts_str}")
+            print(f"{'='*60}\n")
+            
+            # 각 검색 결과 상세 출력
+            for idx, hit in enumerate(hits, 1):
+                try:
+                    print(f"--- 결과 #{idx} ---")
+                    print(f"ID: {hit.get('_id', 'N/A')}")
+                    print(f"Score: {hit.get('_score', 0):.4f}")
+                    
+                    if 'fields' in hit:
+                        fields = hit['fields']
+                        title = fields.get('Title', 'N/A')
+                        category = fields.get('Category', 'N/A')
+                        chunk_text = fields.get('chunk_text', 'N/A')
+                        
+                        # 제목과 카테고리 출력
+                        print(f"제목: {title}")
+                        print(f"카테고리: {category}")
+                        
+                        # chunk_text 요약 출력 (처음 200자)
+                        if chunk_text and chunk_text != 'N/A':
+                            preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
+                            print(f"내용 미리보기: {preview}")
+                    
+                    print("")  # 빈 줄로 구분
+                    
+                except UnicodeEncodeError:
+                    print(f"--- 결과 #{idx} --- [인코딩 오류로 출력 불가]")
+                except Exception as e:
+                    print(f"--- 결과 #{idx} --- 출력 중 오류: {str(e)}")
+            
+            print(f"{'='*60}\n")
+        else:
+            print(f"\n⚠️ 검색 결과가 없습니다.")
+            print(f"네임스페이스: {namespace}")
+            print(f"검색된 지역: {', '.join(searched_districts) if searched_districts else 'None'}\n")
+        
+        # 검색 결과 구조 생성
+        ranked_results = {
+            'result': {
+                'hits': hits
+            }
+        }
+        
+        return {
+            "source": "pinecone",
+            "namespace": namespace,
+            "results": ranked_results,
+            "status": "success",
+            "search_info": search_info
+        }
     
     def process_query(self, query):
         """
@@ -831,6 +955,185 @@ def query_endpoint():
             "results": []
         }), 500
 
+
+@app.route('/explore', methods=['POST'])
+def explore_endpoint():
+    try:
+        # JSON 요청에서 userCity와 userDistrict 데이터 추출
+        data = request.get_json()
+        if not data:
+            return jsonify({"error": "No data provided"}), 400
+        
+        user_city = data.get('userCity', '')
+        user_district = data.get('userDistrict', '')
+        
+        # UTF-8 안전 출력
+        try:
+            print(f"탐색 요청 받음 - 도시: {user_city}, 구/군: {user_district}")
+        except UnicodeEncodeError:
+            print("탐색 요청 받음 - [encoding error]")
+        
+        # 지역 정보가 있는지 확인
+        if not user_city and not user_district:
+            return jsonify({
+                "status": "success",
+                "message": "위치 정보가 제공되지 않았습니다.",
+                "recommendations": [],
+                "generated_query": None,
+                "query_response": None
+            })
+        
+        # Multi-query 처리
+        generated_query = None
+        query_response = None
+        actual_llm_query = None  # LLM이 생성한 실제 질문
+        
+        if user_city and user_district and gemini_client:
+            try:
+                # 랜덤으로 카테고리 선택
+                selected_category = random.choice(list(MULTI_QUERY_CATEGORY.keys()))
+                query_template = MULTI_QUERY_CATEGORY[selected_category]
+                
+                # 템플릿에 실제 위치 정보 채우기 - 이것을 generated_query로 사용
+                generated_query = query_template.format(
+                    user_city=user_city,
+                    user_district=user_district
+                )
+                
+                # Gemini를 사용하여 더 자연스러운 질문 생성
+                prompt = f"""
+다음 주제에 대해 자연스럽고 구체적인 질문을 하나 만들어주세요.
+주제: {generated_query}
+카테고리: {selected_category}
+
+시니어(노인)를 위한 정보를 찾는 질문이어야 합니다.
+질문만 반환하고 다른 설명은 하지 마세요.
+"""
+                
+                response = gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                actual_llm_query = response.text.strip()
+                print(f"카테고리: {selected_category}")
+                print(f"템플릿 질문: {generated_query}")
+                print(f"LLM 생성 질문: {actual_llm_query}")
+                
+                # LLM이 생성한 질문을 query_processor로 처리
+                query_result = query_processor.process_query(actual_llm_query)
+                
+                # 결과 포맷팅
+                if query_result["source"] == "llm":
+                    query_response = {
+                        "type": "llm",
+                        "content": query_result.get("response", "응답 없음"),
+                        "category": selected_category  # 카테고리 추가
+                    }
+                elif query_result["source"] == "pinecone":
+                    results = []
+                    if query_result["status"] == "success" and query_result.get("results"):
+                        if "result" in query_result["results"]:
+                            hits = query_result["results"]["result"].get("hits", [])
+                            for hit in hits[:3]:  # 상위 3개만
+                                if 'fields' in hit:
+                                    fields = hit['fields']
+                                    results.append({
+                                        "title": fields.get('Title', 'N/A'),
+                                        "category": fields.get('Category', 'N/A'),
+                                        "content": fields.get('chunk_text', 'N/A')[:200] + "..."  # 요약
+                                    })
+                    
+                    query_response = {
+                        "type": "pinecone",
+                        "results": results,
+                        "category": selected_category
+                    }
+                
+            except Exception as e:
+                print(f"Multi-query 처리 중 오류: {str(e)}")
+        
+        # 지역별 추천 검색어 또는 인기 카테고리 생성
+        recommendations = []
+        
+        # 서울시인 경우
+        if user_city == "서울특별시" or "서울" in user_city:
+            recommendations = [
+                f"{user_district} 노인복지관",
+                f"{user_district} 경로당",
+                f"{user_district} 시니어 일자리",
+                f"{user_district} 문화센터 프로그램",
+                f"{user_district} 방문요양센터"
+            ]
+        # 경기도인 경우
+        elif user_city == "경기도" or "경기" in user_city:
+            recommendations = [
+                f"{user_district} 노인복지시설",
+                f"{user_district} 실버 일자리",
+                f"{user_district} 평생교육원",
+                f"{user_district} 주간보호센터",
+                f"{user_district} 노인교실"
+            ]
+        # 인천인 경우
+        elif user_city == "인천광역시" or "인천" in user_city:
+            recommendations = [
+                f"{user_district} 노인복지관",
+                f"{user_district} 시니어클럽",
+                f"{user_district} 문화강좌",
+                f"{user_district} 일자리센터",
+                f"{user_district} 경로당"
+            ]
+        else:
+            # 기타 지역
+            recommendations = [
+                "노인복지시설 찾기",
+                "시니어 일자리 정보",
+                "문화 프로그램 안내",
+                "건강 관리 서비스",
+                "여가 활동 정보"
+            ]
+        
+        # 응답 데이터 구성
+        response_data = {
+            "status": "success",
+            "user_location": {
+                "city": user_city,
+                "district": user_district
+            },
+            "recommendations": recommendations,
+            "popular_searches": [
+                "방문요양 서비스",
+                "노인 일자리 채용",
+                "실버 문화강좌",
+                "건강검진 안내",
+                "복지관 프로그램"
+            ],
+            "nearby_facilities": [],  # 추후 구현 가능
+            "generated_query": generated_query,  # 템플릿 질문 (위치 정보가 채워진)
+            "query_response": query_response  # 질문에 대한 응답
+        }
+        
+        # 지역이 명확한 경우 인접 지역 정보도 추가
+        if user_district:
+            if user_district in SEOUL_DISTRICT_NEIGHBORS:
+                response_data["nearby_districts"] = SEOUL_DISTRICT_NEIGHBORS[user_district][:3]
+            elif user_district in GYEONGGI_DISTRICT_NEIGHBORS:
+                response_data["nearby_districts"] = GYEONGGI_DISTRICT_NEIGHBORS[user_district][:3]
+        
+        return jsonify(response_data)
+        
+    except Exception as e:
+        import traceback
+        try:
+            print(f"탐색 처리 중 오류: {str(e)}")
+            print(traceback.format_exc())
+        except UnicodeEncodeError:
+            print("탐색 처리 중 오류: [encoding error]")
+        return jsonify({
+            "status": "error",
+            "error": str(e)
+        }), 500
+    
 # 서버 상태 확인용 엔드포인트
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -858,7 +1161,7 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1>지역 기반 통합 검색 서버</h1>
+            <h1>지역 기반 통합 검색</h1>
             <p>서울시와 경기도의 지역 기반 지능형 검색 기능을 제공하는 통합 검색 서버입니다.</p>
             
             <div class="feature">
@@ -868,6 +1171,7 @@ def home():
                     <li><strong>인접 지역 확장</strong>: 해당 지역과 인접한 지역까지 포함하여 검색</li>
                     <li><strong>AI 기반 네임스페이스 선택</strong>: Gemini를 활용한 지능형 카테고리 분류</li>
                     <li><strong>벡터 검색 + LLM</strong>: Pinecone 벡터 검색과 Gemini LLM의 하이브리드 응답</li>
+                    <li><strong>우선 검색 기능</strong>: 추출된 지역을 우선 검색 후 필요시 인접 지역 확장</li>
                 </ul>
             </div>
             

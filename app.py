@@ -555,6 +555,7 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
     def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=8):
         """
         Search Pinecone vector database using the specified namespace.
+        추출된 지역을 우선적으로 검색하고, 결과가 8개 미만일 경우 인접 지역에서 추가 검색합니다.
         """
         if self.dense_index is None:
             return {
@@ -589,94 +590,81 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
             except UnicodeEncodeError:
                 print("검색할 지역 목록: [encoding error]")
             
-            # 검색 필터 구성
-            search_filter = None
-            if districts_to_search:
-                search_filter = {"Category": {"$in": districts_to_search}}
+            # 1단계: 추출된 지역만으로 우선 검색
+            all_results = []
+            searched_districts = []
             
-            # 검색 실행
-            search_params = {
-                "inputs": {"text": query},
-                "top_k": top_k
-            }
+            if target_district:
+                print(f"\n🔍 1단계: {target_district}에서 우선 검색...")
+                
+                search_params = {
+                    "inputs": {"text": query},
+                    "top_k": top_k,
+                    "filter": {"Category": target_district}
+                }
+                
+                first_search = self.dense_index.search(
+                    namespace=namespace,
+                    query=search_params,
+                    fields=["Title", "Category", "chunk_text"],
+                    rerank={
+                        "model": "bge-reranker-v2-m3",
+                        "top_n": rerank_top_n,
+                        "rank_fields": ["chunk_text"]
+                    },
+                )
+                
+                if first_search and 'result' in first_search and 'hits' in first_search['result']:
+                    first_hits = first_search['result']['hits']
+                    all_results.extend(first_hits)
+                    searched_districts.append(target_district)
+                    print(f"✅ {target_district}에서 {len(first_hits)}개 결과 발견")
+                    
+                    # 결과가 8개 이상이면 바로 반환
+                    if len(all_results) >= rerank_top_n:
+                        print(f"📊 충분한 결과 확보 (총 {len(all_results)}개)")
+                        return self._format_search_response(
+                            namespace, all_results, target_district, searched_districts, districts_to_search
+                        )
             
-            # 필터가 있는 경우에만 추가
-            if search_filter:
-                search_params["filter"] = search_filter
+            # 2단계: 결과가 8개 미만이면 인접 지역에서 추가 검색
+            if len(all_results) < rerank_top_n and districts_to_search:
+                remaining_districts = [d for d in districts_to_search if d != target_district]
+                
+                if remaining_districts:
+                    needed_results = rerank_top_n - len(all_results)
+                    print(f"\n🔍 2단계: 추가 {needed_results}개 결과가 필요함. 인접 지역에서 검색...")
+                    print(f"검색할 인접 지역: {', '.join(remaining_districts)}")
+                    
+                    search_params = {
+                        "inputs": {"text": query},
+                        "top_k": top_k,
+                        "filter": {"Category": {"$in": remaining_districts}}
+                    }
+                    
+                    second_search = self.dense_index.search(
+                        namespace=namespace,
+                        query=search_params,
+                        fields=["Title", "Category", "chunk_text"],
+                        rerank={
+                            "model": "bge-reranker-v2-m3",
+                            "top_n": needed_results,
+                            "rank_fields": ["chunk_text"]
+                        },
+                    )
+                    
+                    if second_search and 'result' in second_search and 'hits' in second_search['result']:
+                        second_hits = second_search['result']['hits']
+                        all_results.extend(second_hits)
+                        searched_districts.extend(remaining_districts)
+                        print(f"✅ 인접 지역에서 {len(second_hits)}개 추가 결과 발견")
             
-            ranked_results = self.dense_index.search(
-                namespace=namespace,
-                query=search_params,
-                fields=["Title", "Category", "chunk_text"],
-                rerank={
-                    "model": "bge-reranker-v2-m3",
-                    "top_n": rerank_top_n,
-                    "rank_fields": ["chunk_text"]
-                },
+            # 최종 결과 반환
+            print(f"\n📊 최종 검색 결과: 총 {len(all_results)}개")
+            return self._format_search_response(
+                namespace, all_results, target_district, searched_districts, districts_to_search
             )
             
-            # 검색 정보를 디버그 정보에 추가
-            search_info = {
-                "target_district": target_district,
-                "districts_searched": districts_to_search,
-                "region_type": "seoul" if self.is_seoul_namespace(namespace) else "gyeonggi" if self.is_gyeonggi_namespace(namespace) else "other"
-            }
-            
-            # 상세한 검색 결과 출력
-            if ranked_results and 'result' in ranked_results and 'hits' in ranked_results['result']:
-                hits = ranked_results['result']['hits']
-                result_count = len(hits)
-                
-                print(f"\n{'='*60}")
-                print(f"🔍 검색 결과: 총 {result_count}개 항목")
-                print(f"📍 검색어: {query}")
-                print(f"📂 네임스페이스: {namespace}")
-                print(f"🏘️ 검색 지역: {districts_str}")
-                print(f"{'='*60}\n")
-                
-                # 각 검색 결과 상세 출력
-                for idx, hit in enumerate(hits, 1):
-                    try:
-                        print(f"--- 결과 #{idx} ---")
-                        print(f"ID: {hit.get('_id', 'N/A')}")
-                        print(f"Score: {hit.get('_score', 0):.4f}")
-                        
-                        if 'fields' in hit:
-                            fields = hit['fields']
-                            title = fields.get('Title', 'N/A')
-                            category = fields.get('Category', 'N/A')
-                            chunk_text = fields.get('chunk_text', 'N/A')
-                            
-                            # 제목과 카테고리 출력
-                            print(f"제목: {title}")
-                            print(f"카테고리: {category}")
-                            
-                            # chunk_text 요약 출력 (처음 200자)
-                            if chunk_text and chunk_text != 'N/A':
-                                preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
-                                print(f"내용 미리보기: {preview}")
-                        
-                        print("")  # 빈 줄로 구분
-                        
-                    except UnicodeEncodeError:
-                        print(f"--- 결과 #{idx} --- [인코딩 오류로 출력 불가]")
-                    except Exception as e:
-                        print(f"--- 결과 #{idx} --- 출력 중 오류: {str(e)}")
-                
-                print(f"{'='*60}\n")
-            else:
-                print(f"\n⚠️ 검색 결과가 없습니다.")
-                print(f"검색어: {query}")
-                print(f"네임스페이스: {namespace}")
-                print(f"검색 지역: {districts_str}\n")
-            
-            return {
-                "source": "pinecone",
-                "namespace": namespace,
-                "results": ranked_results,
-                "status": "success",
-                "search_info": search_info
-            }
         except Exception as e:
             try:
                 print(f"Pinecone search error: {str(e)}")
@@ -689,6 +677,81 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
                 "status": "error",
                 "error": str(e)
             }
+    
+    def _format_search_response(self, namespace, hits, target_district, searched_districts, all_districts):
+        """
+        검색 결과를 포맷팅하여 반환합니다.
+        """
+        # 검색 정보
+        search_info = {
+            "target_district": target_district,
+            "districts_searched": searched_districts,
+            "districts_available": all_districts,
+            "region_type": "seoul" if self.is_seoul_namespace(namespace) else "gyeonggi" if self.is_gyeonggi_namespace(namespace) else "other"
+        }
+        
+        # 상세한 검색 결과 출력
+        if hits:
+            result_count = len(hits)
+            districts_str = ', '.join(searched_districts) if searched_districts else 'None'
+            
+            print(f"\n{'='*60}")
+            print(f"🔍 검색 결과: 총 {result_count}개 항목")
+            print(f"📍 대상 지역: {target_district if target_district else 'None'}")
+            print(f"📂 네임스페이스: {namespace}")
+            print(f"🏘️ 실제 검색된 지역: {districts_str}")
+            print(f"{'='*60}\n")
+            
+            # 각 검색 결과 상세 출력
+            for idx, hit in enumerate(hits, 1):
+                try:
+                    print(f"--- 결과 #{idx} ---")
+                    print(f"ID: {hit.get('_id', 'N/A')}")
+                    print(f"Score: {hit.get('_score', 0):.4f}")
+                    
+                    if 'fields' in hit:
+                        fields = hit['fields']
+                        title = fields.get('Title', 'N/A')
+                        category = fields.get('Category', 'N/A')
+                        chunk_text = fields.get('chunk_text', 'N/A')
+                        
+                        # 제목과 카테고리 출력
+                        print(f"제목: {title}")
+                        print(f"카테고리: {category}")
+                        
+                        # chunk_text 요약 출력 (처음 200자)
+                        if chunk_text and chunk_text != 'N/A':
+                            preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
+                            print(f"내용 미리보기: {preview}")
+                    
+                    print("")  # 빈 줄로 구분
+                    
+                except UnicodeEncodeError:
+                    print(f"--- 결과 #{idx} --- [인코딩 오류로 출력 불가]")
+                except Exception as e:
+                    print(f"--- 결과 #{idx} --- 출력 중 오류: {str(e)}")
+            
+            print(f"{'='*60}\n")
+        else:
+            print(f"\n⚠️ 검색 결과가 없습니다.")
+            print(f"네임스페이스: {namespace}")
+            print(f"검색된 지역: {', '.join(searched_districts) if searched_districts else 'None'}\n")
+        
+        # 검색 결과 구조 생성
+        ranked_results = {
+            'result': {
+                'hits': hits
+            }
+        }
+        
+        return {
+            "source": "pinecone",
+            "namespace": namespace,
+            "results": ranked_results,
+            "status": "success",
+            "search_info": search_info
+        }
+    
     def process_query(self, query):
         """
         Process a user query through the complete pipeline:
@@ -1108,6 +1171,7 @@ def home():
                     <li><strong>인접 지역 확장</strong>: 해당 지역과 인접한 지역까지 포함하여 검색</li>
                     <li><strong>AI 기반 네임스페이스 선택</strong>: Gemini를 활용한 지능형 카테고리 분류</li>
                     <li><strong>벡터 검색 + LLM</strong>: Pinecone 벡터 검색과 Gemini LLM의 하이브리드 응답</li>
+                    <li><strong>우선 검색 기능</strong>: 추출된 지역을 우선 검색 후 필요시 인접 지역 확장</li>
                 </ul>
             </div>
             
