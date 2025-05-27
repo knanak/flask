@@ -102,7 +102,6 @@ SEOUL_DISTRICT_NEIGHBORS = {
     '중랑구': ['노원구', '광진구', '동대문구', '성북구', '강북구']
 }
 
-
 # 경기도 시·군 간 인접 정보 (각 시·군과 인접한 시·군 목록)
 GYEONGGI_DISTRICT_NEIGHBORS = {
     # 북부 지역
@@ -149,7 +148,19 @@ GYEONGGI_DISTRICT_NEIGHBORS = {
     '이천시': ['광주시', '여주시', '용인시', '안성시', '충주시', '음성군'],
 }
 
-
+# 인천시 행정구역 간 인접 정보 (각 구와 인접한 구 목록)
+ICH_DISTRICT_NEIGHBORS = {
+    '중구': ['동구', '미추홀구', '서구'],
+    '동구': ['중구', '미추홀구'],
+    '미추홀구': ['중구', '동구', '남동구', '부평구', '서구'],
+    '연수구': ['남동구', '서구'],
+    '남동구': ['미추홀구', '연수구', '부평구'],
+    '부평구': ['미추홀구', '남동구', '계양구', '서구'],
+    '계양구': ['부평구', '서구'],
+    '서구': ['중구', '미추홀구', '부평구', '계양구', '연수구'],
+    '강화군': [],  # 섬 지역으로 다른 구와 육로로 인접하지 않음
+    '옹진군': []   # 섬 지역으로 다른 구와 육로로 인접하지 않음
+}
 
 # multi_query_category 정의 (파일 상단, NAMESPACE_INFO 아래에 추가)
 MULTI_QUERY_CATEGORY = {
@@ -324,10 +335,16 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         """
         return namespace and namespace.startswith('kk')
     
+    def is_incheon_namespace(self, namespace):
+        """
+        네임스페이스가 인천 관련인지 확인합니다.
+        """
+        return namespace and namespace.startswith('ich')
+    
     def extract_district_from_query(self, query, namespace):
         """
         사용자 쿼리에서 지역명을 추출합니다.
-        네임스페이스에 따라 서울시 구 또는 경기도 시·군을 추출합니다.
+        네임스페이스에 따라 서울시 구, 경기도 시·군, 또는 인천시 구·군을 추출합니다.
         
         Args:
             query: 사용자 검색어
@@ -340,6 +357,8 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             return self._extract_seoul_district(query)
         elif self.is_gyeonggi_namespace(namespace):
             return self._extract_gyeonggi_district(query)
+        elif self.is_incheon_namespace(namespace):
+            return self._extract_incheon_district(query)
         else:
             return None
     
@@ -507,10 +526,92 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         
         return None
     
+    def _extract_incheon_district(self, query):
+        """
+        인천시 구·군 이름을 추출합니다.
+        동 이름이 포함된 경우, 해당 동이 속한 구·군을 찾습니다.
+        """
+        all_districts = list(ICH_DISTRICT_NEIGHBORS.keys())
+        
+        # 정규식 패턴: '구' 또는 '군' 글자가 포함된 단어
+        pattern = r'(\w+[구군])'
+        matches = re.findall(pattern, query)
+        
+        # 추출된 구·군 중에서 실제 인천시 구·군인지 확인
+        for match in matches:
+            if match in all_districts:
+                return match
+        
+        # '동' 이름이 포함된 경우 확인
+        dong_pattern = r'(\w+동)'
+        dong_matches = re.findall(dong_pattern, query)
+        
+        if dong_matches and self.gemini_client:
+            # 동 이름이 있는 경우, 해당 동이 속한 구·군을 찾기
+            dong_name = dong_matches[0]
+            try:
+                prompt = f"""
+다음 동(洞) 이름이 인천시의 어느 구·군에 속하는지 알려주세요.
+동 이름: {dong_name}
+
+### 가능한 인천시 구·군 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+해당 동이 속한 구·군 이름만 답변해 주세요 (예: "연수구", "부평구").
+만약 인천시에 속하지 않거나 찾을 수 없으면 "없음"이라고 답변하세요.
+
+### 참고 정보:
+- 송도동은 연수구에 속합니다
+- 구월동은 남동구에 속합니다
+- 부평동은 부평구에 속합니다
+"""
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_district = response.text.strip()
+                if extracted_district in all_districts:
+                    print(f"'{dong_name}'이(가) 속한 구·군: {extracted_district}")
+                    return extracted_district
+            except Exception as e:
+                print(f"동 이름으로 구·군 추출 중 오류 발생: {str(e)}")
+        
+        # Gemini를 통한 일반적인 구·군 추출 시도
+        try:
+            prompt = f"""
+다음 사용자 질문에서 인천시 행정구역(구 또는 군 이름)을 추출해주세요.
+동(洞) 이름이 있다면 해당 동이 속한 구·군을 찾아주세요.
+만약 특정 구·군 이름이 없다면 "없음"이라고 답해주세요.
+
+### 사용자 질문:
+{query}
+
+### 가능한 인천시 구·군 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+구·군 이름만 답변해 주세요 (예: "남동구", "강화군"). 없으면 "없음"이라고만 답변하세요.
+"""
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            
+            extracted_district = response.text.strip()
+            if extracted_district in all_districts:
+                return extracted_district
+                
+        except Exception as e:
+            print(f"인천 구·군 추출 중 오류 발생: {str(e)}")
+        
+        return None
+    
     def get_nearby_districts(self, district, namespace, max_neighbors=3):
         """
         지정된 지역과 인접한 지역 목록을 반환합니다.
-        네임스페이스에 따라 서울 또는 경기도 인접 정보를 사용합니다.
+        네임스페이스에 따라 서울, 경기도, 또는 인천 인접 정보를 사용합니다.
         
         Args:
             district: 기준이 되는 지역 이름
@@ -524,6 +625,8 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             return self._get_seoul_nearby_districts(district, max_neighbors)
         elif self.is_gyeonggi_namespace(namespace):
             return self._get_gyeonggi_nearby_districts(district, max_neighbors)
+        elif self.is_incheon_namespace(namespace):
+            return self._get_incheon_nearby_districts(district, max_neighbors)
         else:
             return []
     
@@ -547,6 +650,20 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         neighbors = GYEONGGI_DISTRICT_NEIGHBORS.get(district, [])[:max_neighbors]
         return [district] + neighbors
     
+    def _get_incheon_nearby_districts(self, district, max_neighbors=3):
+        """
+        인천시 구·군의 인접 구·군 목록을 반환합니다.
+        """
+        if not district or district not in ICH_DISTRICT_NEIGHBORS:
+            return ['남동구', '부평구', '연수구']  # 기본 인기 지역
+        
+        neighbors = ICH_DISTRICT_NEIGHBORS.get(district, [])[:max_neighbors]
+        # 강화군이나 옹진군처럼 인접 지역이 없는 경우 처리
+        if not neighbors:
+            # 섬 지역인 경우 다른 주요 구들을 반환
+            return [district] + ['남동구', '부평구', '연수구'][:max_neighbors]
+        return [district] + neighbors
+    
     def select_relevant_nearby_districts(self, query, target_district, namespace, max_neighbors=3):
         """
         검색어와 관련성이 높은 인접 지역을 선택합니다.
@@ -555,6 +672,8 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             return self._select_seoul_relevant_districts(query, target_district, max_neighbors)
         elif self.is_gyeonggi_namespace(namespace):
             return self._select_gyeonggi_relevant_districts(query, target_district, max_neighbors)
+        elif self.is_incheon_namespace(namespace):
+            return self._select_incheon_relevant_districts(query, target_district, max_neighbors)
         else:
             return self.get_nearby_districts(target_district, namespace, max_neighbors)
     
@@ -628,6 +747,47 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
         
         return self._get_gyeonggi_nearby_districts(target_district, max_neighbors)
     
+    def _select_incheon_relevant_districts(self, query, target_district, max_neighbors=3):
+        """
+        인천시 구·군 기준으로 관련성 높은 인접 구·군을 선택합니다.
+        """
+        if not target_district or target_district not in ICH_DISTRICT_NEIGHBORS:
+            return self._get_incheon_nearby_districts(target_district, max_neighbors)
+        
+        # 강화군이나 옹진군처럼 인접 지역이 없는 경우 처리
+        neighbors_list = ICH_DISTRICT_NEIGHBORS[target_district]
+        if not neighbors_list:
+            # 섬 지역인 경우 다른 주요 구들을 반환
+            return [target_district] + ['남동구', '부평구', '연수구'][:max_neighbors]
+        
+        try:
+            prompt = f"""
+사용자가 "{query}"라고 검색했고, 여기서 "{target_district}"를 검색 지역으로 식별했습니다.
+다음 인접 구·군 중에서 이 검색어와 가장 관련이 높을 것 같은 구·군을 최대 {max_neighbors}개 선택해주세요:
+{neighbors_list}
+
+### 응답 형식:
+JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 제공하세요.
+예시: ["구군이름1", "구군이름2", "구군이름3"]
+"""
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            
+            try:
+                neighbors = json.loads(response.text)
+                if isinstance(neighbors, list) and all(isinstance(d, str) for d in neighbors):
+                    valid_neighbors = [d for d in neighbors if d in ICH_DISTRICT_NEIGHBORS]
+                    if valid_neighbors:
+                        return [target_district] + valid_neighbors[:max_neighbors]
+            except:
+                pass
+        except Exception as e:
+            print(f"인천 인접 구·군 선택 중 오류 발생: {str(e)}")
+        
+        return self._get_incheon_nearby_districts(target_district, max_neighbors)
+    
     def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=8):
         """
         Search Pinecone vector database using the specified namespace.
@@ -649,7 +809,7 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
             except UnicodeEncodeError:
                 print("Searching Pinecone with namespace: [encoding error]")
             
-            # 검색어에서 지역명 추출 (네임스페이스에 따라 서울 구 또는 경기도 시·군)
+            # 검색어에서 지역명 추출 (네임스페이스에 따라 서울 구, 경기도 시·군, 또는 인천 구·군)
             target_district = self.extract_district_from_query(query, namespace)
             
             try:
@@ -758,12 +918,22 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
         """
         검색 결과를 포맷팅하여 반환합니다.
         """
+        # 지역 타입 판별
+        if self.is_seoul_namespace(namespace):
+            region_type = "seoul"
+        elif self.is_gyeonggi_namespace(namespace):
+            region_type = "gyeonggi"
+        elif self.is_incheon_namespace(namespace):
+            region_type = "incheon"
+        else:
+            region_type = "other"
+        
         # 검색 정보
         search_info = {
             "target_district": target_district,
             "districts_searched": searched_districts,
             "districts_available": all_districts,
-            "region_type": "seoul" if self.is_seoul_namespace(namespace) else "gyeonggi" if self.is_gyeonggi_namespace(namespace) else "other"
+            "region_type": region_type
         }
         
         # 상세한 검색 결과 출력
@@ -1195,6 +1365,14 @@ def explore_endpoint():
                 response_data["nearby_districts"] = SEOUL_DISTRICT_NEIGHBORS[user_district][:3]
             elif user_district in GYEONGGI_DISTRICT_NEIGHBORS:
                 response_data["nearby_districts"] = GYEONGGI_DISTRICT_NEIGHBORS[user_district][:3]
+            elif user_district in ICH_DISTRICT_NEIGHBORS:
+                # 인천 지역 인접 정보 추가
+                neighbors = ICH_DISTRICT_NEIGHBORS[user_district]
+                if neighbors:
+                    response_data["nearby_districts"] = neighbors[:3]
+                else:
+                    # 강화군이나 옹진군처럼 인접 지역이 없는 경우
+                    response_data["nearby_districts"] = ['남동구', '부평구', '연수구'][:3]
         
         return jsonify(response_data)
         
@@ -1237,13 +1415,13 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1>지역 기반 통합 검색</h1>
-            <p>서울시와 경기도의 지역 기반 지능형 검색 기능을 제공하는 통합 검색 서버입니다.</p>
+            <h1>지역 기반 통합 검색 서비스</h1>
+            <p>서울시, 경기도, 인천시의 지역 기반 지능형 검색 기능을 제공하는 통합 검색 서버입니다.</p>
             
             <div class="feature">
                 <h2>🎯 주요 기능</h2>
                 <ul>
-                    <li><strong>지역 인식 검색</strong>: 서울시 구 및 경기도 시·군 자동 인식</li>
+                    <li><strong>지역 인식 검색</strong>: 서울시 구, 경기도 시·군, 인천시 구·군 자동 인식</li>
                     <li><strong>인접 지역 확장</strong>: 해당 지역과 인접한 지역까지 포함하여 검색</li>
                     <li><strong>AI 기반 네임스페이스 선택</strong>: Gemini를 활용한 지능형 카테고리 분류</li>
                     <li><strong>벡터 검색 + LLM</strong>: Pinecone 벡터 검색과 Gemini LLM의 하이브리드 응답</li>
@@ -1251,6 +1429,14 @@ def home():
                 </ul>
             </div>
             
+            <div class="feature">
+                <h2>📍 지원 지역</h2>
+                <ul>
+                    <li><strong>서울특별시</strong>: 25개 구</li>
+                    <li><strong>경기도</strong>: 31개 시·군</li>
+                    <li><strong>인천광역시</strong>: 8개 구, 2개 군 (강화군, 옹진군 포함)</li>
+                </ul>
+            </div>
 
         </div>
     </body>
