@@ -1388,6 +1388,17 @@ def explore_endpoint():
             "error": str(e)
         }), 500
     
+
+# 서버 상태 확인용 엔드포인트
+@app.route('/auth/login/kakao', methods=['GET'])
+def logiin():
+    print('login')
+    return jsonify({
+        "status": "ok",
+        "pinecone": "available" if pc is not None else "unavailable",
+        "gemini": "available" if gemini_client is not None else "unavailable"
+    })
+
 # 서버 상태 확인용 엔드포인트
 @app.route('/health', methods=['GET'])
 def health_check():
