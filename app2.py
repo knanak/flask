@@ -62,15 +62,16 @@ except Exception as e:
 
 # Namespace 정보
 NAMESPACE_INFO = {
-    'seoul_job': '서울시 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'seoul_culture': '서울시 문화, 교육, 여가 프로그램 관련 데이터', 
-    'seoul_facility': '서울시 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
+    'seoul_job': '서울특별시 고용 정보, 채용 공고, 일자리 관련 데이터',
+    'seoul_culture': '서울특별시 문화, 교육, 여가 프로그램 관련 데이터', 
+    'seoul_facility': '서울특별시 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'kk_job': '경기도 고용 정보, 채용 공고, 일자리 관련 데이터',
     'kk_culture': '경기도 문화, 교육, 여가 프로그램 관련 데이터', 
     'kk_facility': '경기도 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'ich_job': '인천 고용 정보, 채용 공고, 일자리 관련 데이터',
     'ich_culture': '인천 문화, 교육, 여가 프로그램 관련 데이터',
     'ich_facility': '인천 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
+    'public_health_center' : '서울특별시 보건소, 인천광역시 보건소, 경기도 보건소'
 }
 
 # 서울시 행정구역 간 인접 정보 (각 구와 인접한 구 목록)
@@ -101,7 +102,6 @@ SEOUL_DISTRICT_NEIGHBORS = {
     '중구': ['종로구', '서대문구', '용산구', '성동구', '동대문구'],
     '중랑구': ['노원구', '광진구', '동대문구', '성북구', '강북구']
 }
-
 
 # 경기도 시·군 간 인접 정보 (각 시·군과 인접한 시·군 목록)
 GYEONGGI_DISTRICT_NEIGHBORS = {
@@ -149,7 +149,19 @@ GYEONGGI_DISTRICT_NEIGHBORS = {
     '이천시': ['광주시', '여주시', '용인시', '안성시', '충주시', '음성군'],
 }
 
-
+# 인천시 행정구역 간 인접 정보 (각 구와 인접한 구 목록)
+ICH_DISTRICT_NEIGHBORS = {
+    '중구': ['동구', '미추홀구', '서구'],
+    '동구': ['중구', '미추홀구'],
+    '미추홀구': ['중구', '동구', '남동구', '부평구', '서구'],
+    '연수구': ['남동구', '서구'],
+    '남동구': ['미추홀구', '연수구', '부평구'],
+    '부평구': ['미추홀구', '남동구', '계양구', '서구'],
+    '계양구': ['부평구', '서구'],
+    '서구': ['중구', '미추홀구', '부평구', '계양구', '연수구'],
+    '강화군': [],  # 섬 지역으로 다른 구와 육로로 인접하지 않음
+    '옹진군': []   # 섬 지역으로 다른 구와 육로로 인접하지 않음
+}
 
 # multi_query_category 정의 (파일 상단, NAMESPACE_INFO 아래에 추가)
 MULTI_QUERY_CATEGORY = {
@@ -186,7 +198,27 @@ class QueryProcessor:
     def select_namespace(self, query, namespace_info=NAMESPACE_INFO):
         """
         Select the most appropriate namespace for a user query using Gemini.
+        눈 검사 관련 키워드가 포함된 경우 public_health_center 네임스페이스를 우선 선택합니다.
         """
+        # 눈 검사 관련 키워드 체크
+        eye_health_keywords = [
+            '눈 검사', '안검사', '눈 질환', '시력검사', '안과검진', '눈검진',
+            '백내장', '녹내장', '황반변성', '안질환', '시력', '안과',
+            '노인 안검진', '개안수술', '눈 수술', '눈 건강', '안구건조증',
+            '노안', '눈치료', '안압검사', '망막검사', '각막검사'
+        ]
+        
+        # 쿼리에 눈 검사 관련 키워드가 포함되어 있는지 확인
+        query_lower = query.lower()
+        for keyword in eye_health_keywords:
+            if keyword in query_lower:
+                return {
+                    "namespace": "public_health_center",
+                    "confidence": 0.95,
+                    "reasoning": f"눈/안과 관련 키워드 '{keyword}'가 포함되어 있어 보건소 정보를 제공합니다."
+                }
+        
+        # 기존 Gemini 로직 유지
         if self.gemini_client is None:
             return {
                 "namespace": None,
@@ -196,26 +228,26 @@ class QueryProcessor:
             
         # Construct the prompt for the model
         prompt = f"""
-당신은 사용자 질문에 가장 적합한 namespace를 선택하는 시스템입니다. 
-다음 정보를 참고하여 주어진 질문이 어떤 namespace에 가장 적합한지 판단하세요.
+    당신은 사용자 질문에 가장 적합한 namespace를 선택하는 시스템입니다. 
+    다음 정보를 참고하여 주어진 질문이 어떤 namespace에 가장 적합한지 판단하세요.
 
-### Namespace 정보:
-{json.dumps(namespace_info, indent=2, ensure_ascii=False)}
+    ### Namespace 정보:
+    {json.dumps(namespace_info, indent=2, ensure_ascii=False)}
 
-### 사용자 질문:
-{query}
+    ### 사용자 질문:
+    {query}
 
-### 응답 형식:
-JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 선택에 대한 confidence score(0.0~1.0)를 제공하세요.
-예시: {{"namespace": "namespace_key", "confidence": 0.95, "reasoning": "이 namespace를 선택한 이유"}}
+    ### 응답 형식:
+    JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 선택에 대한 confidence score(0.0~1.0)를 제공하세요.
+    예시: {{"namespace": "namespace_key", "confidence": 0.95, "reasoning": "이 namespace를 선택한 이유"}}
 
-항상 정확히 하나의 namespace만 선택하세요. 어떤 namespace에도 맞지 않는다면 confidence를 0.3 미만으로 설정하고 namespace를 null로 지정하세요.
-"""
+    항상 정확히 하나의 namespace만 선택하세요. 어떤 namespace에도 맞지 않는다면 confidence를 0.3 미만으로 설정하고 namespace를 null로 지정하세요.
+    """
 
         # Generate response using Gemini
         try:
             response = self.gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -258,6 +290,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
                 "reasoning": f"Error calling Gemini API: {str(e)}",
                 "error": str(e)
             }
+
     
     def get_llm_response(self, query):
         """
@@ -296,7 +329,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
 """
             
             response = self.gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             return {
@@ -324,10 +357,16 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         """
         return namespace and namespace.startswith('kk')
     
+    def is_incheon_namespace(self, namespace):
+        """
+        네임스페이스가 인천 관련인지 확인합니다.
+        """
+        return namespace and namespace.startswith('ich')
+    
     def extract_district_from_query(self, query, namespace):
         """
         사용자 쿼리에서 지역명을 추출합니다.
-        네임스페이스에 따라 서울시 구 또는 경기도 시·군을 추출합니다.
+        네임스페이스에 따라 서울시 구, 경기도 시·군, 또는 인천시 구·군을 추출합니다.
         
         Args:
             query: 사용자 검색어
@@ -340,12 +379,15 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             return self._extract_seoul_district(query)
         elif self.is_gyeonggi_namespace(namespace):
             return self._extract_gyeonggi_district(query)
+        elif self.is_incheon_namespace(namespace):
+            return self._extract_incheon_district(query)
         else:
             return None
     
     def _extract_seoul_district(self, query):
         """
         서울시 구 이름을 추출합니다.
+        동 이름이 포함된 경우, 해당 동이 속한 구를 찾습니다.
         """
         all_districts = list(SEOUL_DISTRICT_NEIGHBORS.keys())
         
@@ -358,10 +400,47 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             if match in all_districts:
                 return match
         
-        # Gemini를 통한 구 추출 시도
+        # '동' 이름이 포함된 경우 확인
+        dong_pattern = r'(\w+동)'
+        dong_matches = re.findall(dong_pattern, query)
+        
+        if dong_matches and self.gemini_client:
+            # 동 이름이 있는 경우, 해당 동이 속한 구를 찾기
+            dong_name = dong_matches[0]
+            try:
+                prompt = f"""
+다음 동(洞) 이름이 서울시의 어느 구에 속하는지 알려주세요.
+동 이름: {dong_name}
+
+### 가능한 서울시 구 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+해당 동이 속한 구 이름만 답변해 주세요 (예: "강남구", "종로구").
+만약 서울시에 속하지 않거나 찾을 수 없으면 "없음"이라고 답변하세요.
+
+### 참고 정보:
+- 삼성동은 강남구에 속합니다
+- 명동은 중구에 속합니다
+- 신촌동은 서대문구에 속합니다
+"""
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_district = response.text.strip()
+                if extracted_district in all_districts:
+                    print(f"'{dong_name}'이(가) 속한 구: {extracted_district}")
+                    return extracted_district
+            except Exception as e:
+                print(f"동 이름으로 구 추출 중 오류 발생: {str(e)}")
+        
+        # Gemini를 통한 일반적인 구 추출 시도
         try:
             prompt = f"""
 다음 사용자 질문에서 서울시 행정구역(구 이름)을 추출해주세요.
+동(洞) 이름이 있다면 해당 동이 속한 구를 찾아주세요.
 만약 특정 구 이름이 없다면 "없음"이라고 답해주세요.
 
 ### 사용자 질문:
@@ -374,7 +453,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
 구 이름만 답변해 주세요 (예: "강남구"). 없으면 "없음"이라고만 답변하세요.
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -390,6 +469,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
     def _extract_gyeonggi_district(self, query):
         """
         경기도 시·군 이름을 추출합니다.
+        동 이름이 포함된 경우, 해당 동이 속한 시·군을 찾습니다.
         """
         all_districts = list(GYEONGGI_DISTRICT_NEIGHBORS.keys())
         
@@ -402,10 +482,47 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             if match in all_districts:
                 return match
         
-        # Gemini를 통한 시·군 추출 시도
+        # '동' 이름이 포함된 경우 확인
+        dong_pattern = r'(\w+동)'
+        dong_matches = re.findall(dong_pattern, query)
+        
+        if dong_matches and self.gemini_client:
+            # 동 이름이 있는 경우, 해당 동이 속한 시·군을 찾기
+            dong_name = dong_matches[0]
+            try:
+                prompt = f"""
+다음 동(洞) 이름이 경기도의 어느 시·군에 속하는지 알려주세요.
+동 이름: {dong_name}
+
+### 가능한 경기도 시·군 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+해당 동이 속한 시·군 이름만 답변해 주세요 (예: "수원시", "평택시").
+만약 경기도에 속하지 않거나 찾을 수 없으면 "없음"이라고 답변하세요.
+
+### 참고 정보:
+- 지제동은 평택시에 속합니다
+- 정자동은 성남시에 속합니다
+- 행신동은 고양시에 속합니다
+"""
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_district = response.text.strip()
+                if extracted_district in all_districts:
+                    print(f"'{dong_name}'이(가) 속한 시·군: {extracted_district}")
+                    return extracted_district
+            except Exception as e:
+                print(f"동 이름으로 시·군 추출 중 오류 발생: {str(e)}")
+        
+        # Gemini를 통한 일반적인 시·군 추출 시도
         try:
             prompt = f"""
 다음 사용자 질문에서 경기도 행정구역(시 또는 군 이름)을 추출해주세요.
+동(洞) 이름이 있다면 해당 동이 속한 시·군을 찾아주세요.
 만약 특정 시·군 이름이 없다면 "없음"이라고 답해주세요.
 
 ### 사용자 질문:
@@ -418,7 +535,7 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
 시·군 이름만 답변해 주세요 (예: "수원시", "연천군"). 없으면 "없음"이라고만 답변하세요.
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -431,10 +548,92 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         
         return None
     
+    def _extract_incheon_district(self, query):
+        """
+        인천시 구·군 이름을 추출합니다.
+        동 이름이 포함된 경우, 해당 동이 속한 구·군을 찾습니다.
+        """
+        all_districts = list(ICH_DISTRICT_NEIGHBORS.keys())
+        
+        # 정규식 패턴: '구' 또는 '군' 글자가 포함된 단어
+        pattern = r'(\w+[구군])'
+        matches = re.findall(pattern, query)
+        
+        # 추출된 구·군 중에서 실제 인천시 구·군인지 확인
+        for match in matches:
+            if match in all_districts:
+                return match
+        
+        # '동' 이름이 포함된 경우 확인
+        dong_pattern = r'(\w+동)'
+        dong_matches = re.findall(dong_pattern, query)
+        
+        if dong_matches and self.gemini_client:
+            # 동 이름이 있는 경우, 해당 동이 속한 구·군을 찾기
+            dong_name = dong_matches[0]
+            try:
+                prompt = f"""
+다음 동(洞) 이름이 인천시의 어느 구·군에 속하는지 알려주세요.
+동 이름: {dong_name}
+
+### 가능한 인천시 구·군 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+해당 동이 속한 구·군 이름만 답변해 주세요 (예: "연수구", "부평구").
+만약 인천시에 속하지 않거나 찾을 수 없으면 "없음"이라고 답변하세요.
+
+### 참고 정보:
+- 송도동은 연수구에 속합니다
+- 구월동은 남동구에 속합니다
+- 부평동은 부평구에 속합니다
+"""
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_district = response.text.strip()
+                if extracted_district in all_districts:
+                    print(f"'{dong_name}'이(가) 속한 구·군: {extracted_district}")
+                    return extracted_district
+            except Exception as e:
+                print(f"동 이름으로 구·군 추출 중 오류 발생: {str(e)}")
+        
+        # Gemini를 통한 일반적인 구·군 추출 시도
+        try:
+            prompt = f"""
+다음 사용자 질문에서 인천시 행정구역(구 또는 군 이름)을 추출해주세요.
+동(洞) 이름이 있다면 해당 동이 속한 구·군을 찾아주세요.
+만약 특정 구·군 이름이 없다면 "없음"이라고 답해주세요.
+
+### 사용자 질문:
+{query}
+
+### 가능한 인천시 구·군 목록:
+{", ".join(all_districts)}
+
+### 응답 형식:
+구·군 이름만 답변해 주세요 (예: "남동구", "강화군"). 없으면 "없음"이라고만 답변하세요.
+"""
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            
+            extracted_district = response.text.strip()
+            if extracted_district in all_districts:
+                return extracted_district
+                
+        except Exception as e:
+            print(f"인천 구·군 추출 중 오류 발생: {str(e)}")
+        
+        return None
+    
     def get_nearby_districts(self, district, namespace, max_neighbors=3):
         """
         지정된 지역과 인접한 지역 목록을 반환합니다.
-        네임스페이스에 따라 서울 또는 경기도 인접 정보를 사용합니다.
+        네임스페이스에 따라 서울, 경기도, 또는 인천 인접 정보를 사용합니다.
         
         Args:
             district: 기준이 되는 지역 이름
@@ -448,6 +647,8 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             return self._get_seoul_nearby_districts(district, max_neighbors)
         elif self.is_gyeonggi_namespace(namespace):
             return self._get_gyeonggi_nearby_districts(district, max_neighbors)
+        elif self.is_incheon_namespace(namespace):
+            return self._get_incheon_nearby_districts(district, max_neighbors)
         else:
             return []
     
@@ -471,6 +672,20 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
         neighbors = GYEONGGI_DISTRICT_NEIGHBORS.get(district, [])[:max_neighbors]
         return [district] + neighbors
     
+    def _get_incheon_nearby_districts(self, district, max_neighbors=3):
+        """
+        인천시 구·군의 인접 구·군 목록을 반환합니다.
+        """
+        if not district or district not in ICH_DISTRICT_NEIGHBORS:
+            return ['남동구', '부평구', '연수구']  # 기본 인기 지역
+        
+        neighbors = ICH_DISTRICT_NEIGHBORS.get(district, [])[:max_neighbors]
+        # 강화군이나 옹진군처럼 인접 지역이 없는 경우 처리
+        if not neighbors:
+            # 섬 지역인 경우 다른 주요 구들을 반환
+            return [district] + ['남동구', '부평구', '연수구'][:max_neighbors]
+        return [district] + neighbors
+    
     def select_relevant_nearby_districts(self, query, target_district, namespace, max_neighbors=3):
         """
         검색어와 관련성이 높은 인접 지역을 선택합니다.
@@ -479,6 +694,8 @@ JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 
             return self._select_seoul_relevant_districts(query, target_district, max_neighbors)
         elif self.is_gyeonggi_namespace(namespace):
             return self._select_gyeonggi_relevant_districts(query, target_district, max_neighbors)
+        elif self.is_incheon_namespace(namespace):
+            return self._select_incheon_relevant_districts(query, target_district, max_neighbors)
         else:
             return self.get_nearby_districts(target_district, namespace, max_neighbors)
     
@@ -500,7 +717,7 @@ JSON 형식으로 응답해 주세요. 선택한 구 이름만 배열로 제공�
 예시: ["구이름1", "구이름2", "구이름3"]
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -535,7 +752,7 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
 예시: ["시군이름1", "시군이름2", "시군이름3"]
 """
             response = self.gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                 contents=prompt
             )
             
@@ -552,9 +769,59 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
         
         return self._get_gyeonggi_nearby_districts(target_district, max_neighbors)
     
-    def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=8):
+    def _select_incheon_relevant_districts(self, query, target_district, max_neighbors=3):
+        """
+        인천시 구·군 기준으로 관련성 높은 인접 구·군을 선택합니다.
+        """
+        if not target_district or target_district not in ICH_DISTRICT_NEIGHBORS:
+            return self._get_incheon_nearby_districts(target_district, max_neighbors)
+        
+        # 강화군이나 옹진군처럼 인접 지역이 없는 경우 처리
+        neighbors_list = ICH_DISTRICT_NEIGHBORS[target_district]
+        if not neighbors_list:
+            # 섬 지역인 경우 다른 주요 구들을 반환
+            return [target_district] + ['남동구', '부평구', '연수구'][:max_neighbors]
+        
+        try:
+            prompt = f"""
+사용자가 "{query}"라고 검색했고, 여기서 "{target_district}"를 검색 지역으로 식별했습니다.
+다음 인접 구·군 중에서 이 검색어와 가장 관련이 높을 것 같은 구·군을 최대 {max_neighbors}개 선택해주세요:
+{neighbors_list}
+
+### 응답 형식:
+JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 제공하세요.
+예시: ["구군이름1", "구군이름2", "구군이름3"]
+"""
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            
+            try:
+                neighbors = json.loads(response.text)
+                if isinstance(neighbors, list) and all(isinstance(d, str) for d in neighbors):
+                    valid_neighbors = [d for d in neighbors if d in ICH_DISTRICT_NEIGHBORS]
+                    if valid_neighbors:
+                        return [target_district] + valid_neighbors[:max_neighbors]
+            except:
+                pass
+        except Exception as e:
+            print(f"인천 인접 구·군 선택 중 오류 발생: {str(e)}")
+        
+        return self._get_incheon_nearby_districts(target_district, max_neighbors)
+    
+    def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=8, user_city=None, user_district=None):
         """
         Search Pinecone vector database using the specified namespace.
+        추출된 지역을 우선적으로 검색하고, 결과가 8개 미만일 경우 인접 지역에서 추가 검색합니다.
+        
+        Args:
+            query: 검색어
+            namespace: 네임스페이스
+            top_k: 검색할 최대 결과 수
+            rerank_top_n: 재순위화할 결과 수
+            user_city: 사용자 도시 (예: "서울특별시", "경기도", "인천광역시")
+            user_district: 사용자 구/시/군 (예: "강남구", "수원시", "남동구")
         """
         if self.dense_index is None:
             return {
@@ -572,7 +839,124 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
             except UnicodeEncodeError:
                 print("Searching Pinecone with namespace: [encoding error]")
             
-            # 검색어에서 지역명 추출 (네임스페이스에 따라 서울 구 또는 경기도 시·군)
+            # public_health_center 네임스페이스인 경우 특별 처리
+            if namespace == "public_health_center":
+                # 1. 전체 지역 목록에서 쿼리에 포함된 지역명 찾기
+                target_district = None
+                
+                # 모든 지역 목록 통합
+                all_districts = {
+                    **{district: "서울특별시" for district in SEOUL_DISTRICT_NEIGHBORS.keys()},
+                    **{district: "경기도" for district in GYEONGGI_DISTRICT_NEIGHBORS.keys()},
+                    **{district: "인천광역시" for district in ICH_DISTRICT_NEIGHBORS.keys()}
+                }
+                
+                # 쿼리에서 지역명 추출
+                for district, city in all_districts.items():
+                    if district in query:
+                        target_district = f"{city} {district}"
+                        print(f"쿼리에서 지역 발견: {target_district}")
+                        break
+                
+                # 2. 지역명을 찾지 못한 경우 LLM으로 추출 시도
+                if not target_district and self.gemini_client:
+                    try:
+                        prompt = f"""
+    다음 질문에서 한국의 행정구역(시/군/구) 이름을 추출해주세요.
+    질문: {query}
+
+    ### 가능한 지역 목록:
+    서울특별시: {", ".join(SEOUL_DISTRICT_NEIGHBORS.keys())}
+    경기도: {", ".join(GYEONGGI_DISTRICT_NEIGHBORS.keys())}
+    인천광역시: {", ".join(ICH_DISTRICT_NEIGHBORS.keys())}
+
+    ### 응답 형식:
+    JSON 형식으로 응답해주세요: {{"city": "도시명", "district": "구/시/군명"}}
+    지역을 찾을 수 없으면: {{"city": null, "district": null}}
+    """
+                        response = self.gemini_client.models.generate_content(
+                            model="gemini-2.0-flash-lite",
+                            contents=prompt
+                        )
+                        
+                        try:
+                            result = json.loads(response.text)
+                            if result.get('city') and result.get('district'):
+                                target_district = f"{result['city']} {result['district']}"
+                                print(f"LLM으로 지역 추출: {target_district}")
+                        except:
+                            pass
+                            
+                    except Exception as e:
+                        print(f"LLM 지역 추출 중 오류: {str(e)}")
+                
+                # 3. 여전히 지역 정보가 없는 경우 사용자 위치 사용
+                if not target_district and user_city and user_district:
+                    target_district = f"{user_city} {user_district}".strip()
+                    print(f"쿼리에서 지역을 찾지 못해 사용자 위치 사용: {target_district}")
+                
+                # 4. 지역 정보가 없는 경우 오류 반환
+                if not target_district:
+                    print("지역 정보를 찾을 수 없습니다.")
+                    return {
+                        "source": "pinecone",
+                        "namespace": namespace,
+                        "results": None,
+                        "status": "error",
+                        "error": "지역 정보가 필요합니다. 위치 정보를 제공해주세요."
+                    }
+                
+                # public_health_center의 경우 Category 필터로 검색
+                print(f"보건소 검색 - 대상 지역: {target_district}")
+                
+                search_params = {
+                    "inputs": {"text": query},
+                    "top_k": top_k,
+                    "filter": {"Category": target_district}
+                }
+                
+                search_result = self.dense_index.search(
+                    namespace=namespace,
+                    query=search_params,
+                    fields=["Title", "Category", "chunk_text"],
+                    rerank={
+                        "model": "bge-reranker-v2-m3",
+                        "top_n": rerank_top_n,
+                        "rank_fields": ["chunk_text"]
+                    },
+                )
+                
+                if search_result and 'result' in search_result and 'hits' in search_result['result']:
+                    hits = search_result['result']['hits']
+                    print(f"보건소 검색 결과: {len(hits)}개")
+                    
+                    # 검색 정보
+                    search_info = {
+                        "target_district": target_district,
+                        "districts_searched": [target_district],
+                        "districts_available": [],
+                        "region_type": "health_center"
+                    }
+                    
+                    return self._format_search_response(
+                        namespace, hits, target_district, [target_district], []
+                    )
+                else:
+                    # 결과가 없는 경우
+                    return {
+                        "source": "pinecone",
+                        "namespace": namespace,
+                        "results": {"result": {"hits": []}},
+                        "status": "success",
+                        "search_info": {
+                            "target_district": target_district,
+                            "districts_searched": [target_district],
+                            "message": f"{target_district} 지역의 보건소 정보를 찾을 수 없습니다."
+                        }
+                    }
+            
+            # 기존 로직 (public_health_center가 아닌 경우)
+            # 검색어에서 지역명 추출 (네임스페이스에 따라 서울 구, 경기도 시·군, 또는 인천 구·군)
             target_district = self.extract_district_from_query(query, namespace)
             
             try:
@@ -589,94 +973,81 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
             except UnicodeEncodeError:
                 print("검색할 지역 목록: [encoding error]")
             
-            # 검색 필터 구성
-            search_filter = None
-            if districts_to_search:
-                search_filter = {"Category": {"$in": districts_to_search}}
+            # 1단계: 추출된 지역만으로 우선 검색
+            all_results = []
+            searched_districts = []
             
-            # 검색 실행
-            search_params = {
-                "inputs": {"text": query},
-                "top_k": top_k
-            }
+            if target_district:
+                print(f"\n🔍 1단계: {target_district}에서 우선 검색...")
+                
+                search_params = {
+                    "inputs": {"text": query},
+                    "top_k": top_k,
+                    "filter": {"Category": target_district}
+                }
+                
+                first_search = self.dense_index.search(
+                    namespace=namespace,
+                    query=search_params,
+                    fields=["Title", "Category", "chunk_text"],
+                    rerank={
+                        "model": "bge-reranker-v2-m3",
+                        "top_n": rerank_top_n,
+                        "rank_fields": ["chunk_text"]
+                    },
+                )
+                
+                if first_search and 'result' in first_search and 'hits' in first_search['result']:
+                    first_hits = first_search['result']['hits']
+                    all_results.extend(first_hits)
+                    searched_districts.append(target_district)
+                    print(f"✅ {target_district}에서 {len(first_hits)}개 결과 발견")
+                    
+                    # 결과가 8개 이상이면 바로 반환
+                    if len(all_results) >= 8:
+                        print(f"📊 충분한 결과 확보 (총 {len(all_results)}개)")
+                        return self._format_search_response(
+                            namespace, all_results, target_district, searched_districts, districts_to_search
+                        )
             
-            # 필터가 있는 경우에만 추가
-            if search_filter:
-                search_params["filter"] = search_filter
+            # 2단계: 결과가 8개 미만이면 인접 지역에서 추가 검색
+            if len(all_results) < 8 and districts_to_search:
+                remaining_districts = [d for d in districts_to_search if d != target_district]
+                
+                if remaining_districts:
+                    needed_results = 8 - len(all_results)
+                    print(f"\n🔍 2단계: 추가 {needed_results}개 결과가 필요함. 인접 지역에서 검색...")
+                    print(f"검색할 인접 지역: {', '.join(remaining_districts)}")
+                    
+                    search_params = {
+                        "inputs": {"text": query},
+                        "top_k": top_k,
+                        "filter": {"Category": {"$in": remaining_districts}}
+                    }
+                    
+                    second_search = self.dense_index.search(
+                        namespace=namespace,
+                        query=search_params,
+                        fields=["Title", "Category", "chunk_text"],
+                        rerank={
+                            "model": "bge-reranker-v2-m3",
+                            "top_n": needed_results,
+                            "rank_fields": ["chunk_text"]
+                        },
+                    )
+                    
+                    if second_search and 'result' in second_search and 'hits' in second_search['result']:
+                        second_hits = second_search['result']['hits']
+                        all_results.extend(second_hits)
+                        searched_districts.extend(remaining_districts)
+                        print(f"✅ 인접 지역에서 {len(second_hits)}개 추가 결과 발견")
             
-            ranked_results = self.dense_index.search(
-                namespace=namespace,
-                query=search_params,
-                fields=["Title", "Category", "chunk_text"],
-                rerank={
-                    "model": "bge-reranker-v2-m3",
-                    "top_n": rerank_top_n,
-                    "rank_fields": ["chunk_text"]
-                },
+            # 최종 결과 반환
+            print(f"\n📊 최종 검색 결과: 총 {len(all_results)}개")
+            return self._format_search_response(
+                namespace, all_results, target_district, searched_districts, districts_to_search
             )
             
-            # 검색 정보를 디버그 정보에 추가
-            search_info = {
-                "target_district": target_district,
-                "districts_searched": districts_to_search,
-                "region_type": "seoul" if self.is_seoul_namespace(namespace) else "gyeonggi" if self.is_gyeonggi_namespace(namespace) else "other"
-            }
-            
-            # 상세한 검색 결과 출력
-            if ranked_results and 'result' in ranked_results and 'hits' in ranked_results['result']:
-                hits = ranked_results['result']['hits']
-                result_count = len(hits)
-                
-                print(f"\n{'='*60}")
-                print(f"🔍 검색 결과: 총 {result_count}개 항목")
-                print(f"📍 검색어: {query}")
-                print(f"📂 네임스페이스: {namespace}")
-                print(f"🏘️ 검색 지역: {districts_str}")
-                print(f"{'='*60}\n")
-                
-                # 각 검색 결과 상세 출력
-                for idx, hit in enumerate(hits, 1):
-                    try:
-                        print(f"--- 결과 #{idx} ---")
-                        print(f"ID: {hit.get('_id', 'N/A')}")
-                        print(f"Score: {hit.get('_score', 0):.4f}")
-                        
-                        if 'fields' in hit:
-                            fields = hit['fields']
-                            title = fields.get('Title', 'N/A')
-                            category = fields.get('Category', 'N/A')
-                            chunk_text = fields.get('chunk_text', 'N/A')
-                            
-                            # 제목과 카테고리 출력
-                            print(f"제목: {title}")
-                            print(f"카테고리: {category}")
-                            
-                            # chunk_text 요약 출력 (처음 200자)
-                            if chunk_text and chunk_text != 'N/A':
-                                preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
-                                print(f"내용 미리보기: {preview}")
-                        
-                        print("")  # 빈 줄로 구분
-                        
-                    except UnicodeEncodeError:
-                        print(f"--- 결과 #{idx} --- [인코딩 오류로 출력 불가]")
-                    except Exception as e:
-                        print(f"--- 결과 #{idx} --- 출력 중 오류: {str(e)}")
-                
-                print(f"{'='*60}\n")
-            else:
-                print(f"\n⚠️ 검색 결과가 없습니다.")
-                print(f"검색어: {query}")
-                print(f"네임스페이스: {namespace}")
-                print(f"검색 지역: {districts_str}\n")
-            
-            return {
-                "source": "pinecone",
-                "namespace": namespace,
-                "results": ranked_results,
-                "status": "success",
-                "search_info": search_info
-            }
         except Exception as e:
             try:
                 print(f"Pinecone search error: {str(e)}")
@@ -689,13 +1060,102 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
                 "status": "error",
                 "error": str(e)
             }
-    def process_query(self, query):
+    def _format_search_response(self, namespace, hits, target_district, searched_districts, all_districts):
+        """
+        검색 결과를 포맷팅하여 반환합니다.
+        """
+        # 지역 타입 판별
+        if self.is_seoul_namespace(namespace):
+            region_type = "seoul"
+        elif self.is_gyeonggi_namespace(namespace):
+            region_type = "gyeonggi"
+        elif self.is_incheon_namespace(namespace):
+            region_type = "incheon"
+        else:
+            region_type = "other"
+        
+        # 검색 정보
+        search_info = {
+            "target_district": target_district,
+            "districts_searched": searched_districts,
+            "districts_available": all_districts,
+            "region_type": region_type
+        }
+        
+        # 상세한 검색 결과 출력
+        if hits:
+            result_count = len(hits)
+            districts_str = ', '.join(searched_districts) if searched_districts else 'None'
+            
+            print(f"\n{'='*60}")
+            print(f"🔍 검색 결과: 총 {result_count}개 항목")
+            print(f"📍 대상 지역: {target_district if target_district else 'None'}")
+            print(f"📂 네임스페이스: {namespace}")
+            print(f"🏘️ 실제 검색된 지역: {districts_str}")
+            print(f"{'='*60}\n")
+            
+            # 각 검색 결과 상세 출력
+            for idx, hit in enumerate(hits, 1):
+                try:
+                    print(f"--- 결과 #{idx} ---")
+                    print(f"ID: {hit.get('_id', 'N/A')}")
+                    print(f"Score: {hit.get('_score', 0):.4f}")
+                    
+                    if 'fields' in hit:
+                        fields = hit['fields']
+                        title = fields.get('Title', 'N/A')
+                        category = fields.get('Category', 'N/A')
+                        chunk_text = fields.get('chunk_text', 'N/A')
+                        
+                        # 제목과 카테고리 출력
+                        print(f"제목: {title}")
+                        print(f"카테고리: {category}")
+                        
+                        # chunk_text 요약 출력 (처음 200자)
+                        if chunk_text and chunk_text != 'N/A':
+                            preview = chunk_text[:200] + "..." if len(chunk_text) > 200 else chunk_text
+                            print(f"내용 미리보기: {preview}")
+                    
+                    print("")  # 빈 줄로 구분
+                    
+                except UnicodeEncodeError:
+                    print(f"--- 결과 #{idx} --- [인코딩 오류로 출력 불가]")
+                except Exception as e:
+                    print(f"--- 결과 #{idx} --- 출력 중 오류: {str(e)}")
+            
+            print(f"{'='*60}\n")
+        else:
+            print(f"\n⚠️ 검색 결과가 없습니다.")
+            print(f"네임스페이스: {namespace}")
+            print(f"검색된 지역: {', '.join(searched_districts) if searched_districts else 'None'}\n")
+        
+        # 검색 결과 구조 생성
+        ranked_results = {
+            'result': {
+                'hits': hits
+            }
+        }
+        
+        return {
+            "source": "pinecone",
+            "namespace": namespace,
+            "results": ranked_results,
+            "status": "success",
+            "search_info": search_info
+        }
+        
+    def process_query(self, query, user_city=None, user_district=None):
         """
         Process a user query through the complete pipeline:
         1. Select the most appropriate namespace
         2. Based on the namespace, either:
-           - Query Pinecone if a specific namespace is selected
-           - Use Gemini LLM for a direct response if no namespace matches
+        - Query Pinecone if a specific namespace is selected
+        - Use Gemini LLM for a direct response if no namespace matches
+        
+        Args:
+            query: 사용자 질문
+            user_city: 사용자 도시
+            user_district: 사용자 구/시/군
         """
         # Step 1: Select namespace
         namespace_result = self.select_namespace(query)
@@ -734,7 +1194,14 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
                 print(f"Using namespace '{selected_namespace}' for Pinecone search")
             except UnicodeEncodeError:
                 print("Using namespace for Pinecone search")
-            response = self.search_pinecone(query=query, namespace=selected_namespace)
+            
+            # search_pinecone에 사용자 위치 정보 전달
+            response = self.search_pinecone(
+                query=query, 
+                namespace=selected_namespace,
+                user_city=user_city,
+                user_district=user_district
+            )
             response["debug"] = debug_info
             
             # 검색 정보 추가
@@ -769,22 +1236,32 @@ JSON 형식으로 응답해 주세요. 선택한 시·군 이름만 배열로 �
             
             return response
 
+
 # QueryProcessor 인스턴스 생성
 query_processor = QueryProcessor(gemini_client, pc, dense_index_name)
+
+# /query 엔드포인트의 public_health_center 처리 부분 수정
+# 기존 result 처리 부분을 수정하여 search_pinecone의 결과를 그대로 사용
 
 @app.route('/query', methods=['POST'])
 def query_endpoint():
     try:
-        # JSON 요청에서 query 데이터 추출
+        # JSON 요청에서 query, userCity, userDistrict 데이터 추출
         data = request.get_json()
+        
         if not data or 'query' not in data:
             return jsonify({"error": "Query parameter is required"}), 400
         
         query = data['query']
+        user_city = data.get('userCity', '')
+        user_district = data.get('userDistrict', '')
         
         # UTF-8 안전 출력
         try:
             print(f"받은 질문: {query}")
+            print(f"전체 요청 데이터: {data}") 
+            if user_city or user_district:
+                print(f"사용자 위치: {user_city} {user_district}")
         except UnicodeEncodeError:
             print("받은 질문: [encoding error]")
         
@@ -801,9 +1278,86 @@ def query_endpoint():
                 }]
             })
         
-        # QueryProcessor를 통해 쿼리 처리
-        result = query_processor.process_query(query)
+        # QueryProcessor를 통해 쿼리 처리 - 사용자 위치 정보 전달
+        result = query_processor.process_query(query, user_city, user_district)
         
+        # public_health_center 네임스페이스인 경우 특별 처리
+        if result.get("namespace") == "public_health_center" or (
+            "debug" in result and 
+            result["debug"].get("namespace_selection", {}).get("selected") == "public_health_center"
+        ):
+            # search_pinecone의 결과를 이미 받았으므로, 그 결과를 사용
+            if result["source"] == "pinecone" and result["status"] == "success":
+                results = []
+                
+                if result.get("results") and "result" in result["results"]:
+                    hits = result["results"]["result"].get("hits", [])
+                    
+                    if hits:
+                        # 검색 결과가 있는 경우
+                        for hit in hits:
+                            item = {
+                                "id": hit.get('_id', ''),
+                                "score": hit.get('_score', 0),
+                            }
+                            
+                            # 필드 정보 추출
+                            if 'fields' in hit:
+                                fields = hit['fields']
+                                item["title"] = fields.get('Title', 'N/A')
+                                item["category"] = fields.get('Category', 'N/A')
+                                item["content"] = fields.get('chunk_text', 'N/A')
+                            
+                            results.append(item)
+                        
+                        # 검색된 지역 정보 포함
+                        location_info = ""
+                        if "search_info" in result:
+                            target_district = result["search_info"].get("target_district", "")
+                            if target_district:
+                                location_info = f"{target_district}의 보건소 정보입니다."
+                        
+                        return jsonify({
+                            "query": query,
+                            "results": results,
+                            "namespace": "public_health_center",
+                            "location_filter": target_district if "search_info" in result else "",
+                            "message": location_info
+                        })
+                    else:
+                        # 해당 지역에 결과가 없는 경우
+                        target_district = ""
+                        if "search_info" in result:
+                            target_district = result["search_info"].get("target_district", "")
+                        
+                        return jsonify({
+                            "query": query,
+                            "results": [{
+                                "id": "no-result",
+                                "score": 0,
+                                "title": "검색 결과 없음",
+                                "category": target_district,
+                                "content": f"{target_district} 지역의 보건소 정보를 찾을 수 없습니다. 인근 지역 보건소를 방문하시거나 지역 보건소에 직접 문의해주세요."
+                            }],
+                            "namespace": "public_health_center",
+                            "location_filter": target_district
+                        })
+                
+                # 오류가 발생한 경우
+                elif result["status"] == "error":
+                    return jsonify({
+                        "query": query,
+                        "results": [{
+                            "id": "error",
+                            "score": 0,
+                            "title": "검색 오류",
+                            "category": "오류",
+                            "content": result.get("error", "보건소 정보 검색 중 오류가 발생했습니다.")
+                        }],
+                        "namespace": "public_health_center"
+                    })
+        
+        # 기존 결과 처리 로직 (public_health_center가 아닌 경우)
         # 결과 형식화 및 반환
         if result["source"] == "llm":
             # LLM 응답 처리
@@ -948,7 +1502,7 @@ def explore_endpoint():
 """
                 
                 response = gemini_client.models.generate_content(
-                model="gemini-1.5-flash",
+                model="gemini-2.0-flash-lite",
                     contents=prompt
                 )
                 
@@ -1056,6 +1610,14 @@ def explore_endpoint():
                 response_data["nearby_districts"] = SEOUL_DISTRICT_NEIGHBORS[user_district][:3]
             elif user_district in GYEONGGI_DISTRICT_NEIGHBORS:
                 response_data["nearby_districts"] = GYEONGGI_DISTRICT_NEIGHBORS[user_district][:3]
+            elif user_district in ICH_DISTRICT_NEIGHBORS:
+                # 인천 지역 인접 정보 추가
+                neighbors = ICH_DISTRICT_NEIGHBORS[user_district]
+                if neighbors:
+                    response_data["nearby_districts"] = neighbors[:3]
+                else:
+                    # 강화군이나 옹진군처럼 인접 지역이 없는 경우
+                    response_data["nearby_districts"] = ['남동구', '부평구', '연수구'][:3]
         
         return jsonify(response_data)
         
@@ -1071,6 +1633,17 @@ def explore_endpoint():
             "error": str(e)
         }), 500
     
+
+# 서버 상태 확인용 엔드포인트
+@app.route('/auth/login/kakao', methods=['GET'])
+def logiin():
+    print('login')
+    return jsonify({
+        "status": "ok",
+        "pinecone": "available" if pc is not None else "unavailable",
+        "gemini": "available" if gemini_client is not None else "unavailable"
+    })
+
 # 서버 상태 확인용 엔드포인트
 @app.route('/health', methods=['GET'])
 def health_check():
@@ -1098,19 +1671,28 @@ def home():
     </head>
     <body>
         <div class="container">
-            <h1>지역 기반 통합 검색 서버</h1>
-            <p>서울시와 경기도의 지역 기반 지능형 검색 기능을 제공하는 통합 검색 서버입니다.</p>
+            <h1>지역 기반 통합 검색 서비스</h1>
+            <p>서울시, 경기도, 인천시의 지역 기반 지능형 검색 기능을 제공하는 통합 검색 서버입니다.</p>
             
             <div class="feature">
                 <h2>🎯 주요 기능</h2>
                 <ul>
-                    <li><strong>지역 인식 검색</strong>: 서울시 구 및 경기도 시·군 자동 인식</li>
+                    <li><strong>지역 인식 검색</strong>: 서울시 구, 경기도 시·군, 인천시 구·군 자동 인식</li>
                     <li><strong>인접 지역 확장</strong>: 해당 지역과 인접한 지역까지 포함하여 검색</li>
                     <li><strong>AI 기반 네임스페이스 선택</strong>: Gemini를 활용한 지능형 카테고리 분류</li>
                     <li><strong>벡터 검색 + LLM</strong>: Pinecone 벡터 검색과 Gemini LLM의 하이브리드 응답</li>
+                    <li><strong>우선 검색 기능</strong>: 추출된 지역을 우선 검색 후 필요시 인접 지역 확장</li>
                 </ul>
             </div>
             
+            <div class="feature">
+                <h2>📍 지원 지역</h2>
+                <ul>
+                    <li><strong>서울특별시</strong>: 25개 구</li>
+                    <li><strong>경기도</strong>: 31개 시·군</li>
+                    <li><strong>인천광역시</strong>: 8개 구, 2개 군 (강화군, 옹진군 포함)</li>
+                </ul>
+            </div>
 
         </div>
     </body>
