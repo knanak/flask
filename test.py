@@ -63,13 +63,13 @@ except Exception as e:
 # Namespace 정보
 NAMESPACE_INFO = {
     'seoul_job': '서울특별시 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'seoul_culture': '서울특별시 문화, 교육, 여가 프로그램 관련 데이터', 
+    'seoul_culture': '서울특별시 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'seoul_facility': '서울특별시 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'kk_job': '경기도 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'kk_culture': '경기도 문화, 교육, 여가 프로그램 관련 데이터', 
+    'kk_culture': '경기도 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'kk_facility': '경기도 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'ich_job': '인천 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'ich_culture': '인천 문화, 교육, 여가 프로그램 관련 데이터',
+    'ich_culture': '인천 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'ich_facility': '인천 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'public_health_center' : '서울특별시 보건소, 인천광역시 보건소, 경기도 보건소'
 }
@@ -263,7 +263,7 @@ class QueryProcessor:
                 return result
             except (json.JSONDecodeError, AttributeError):
                 # If that fails, try to extract JSON from the text
-                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                 if json_match:
                     try:
                         result = json.loads(json_match.group(0))
@@ -501,10 +501,10 @@ class QueryProcessor:
                     model="gemini-2.0-flash-lite",
                     contents=prompt
                 )
-                
+                print('5. response', response.text)
                 try:
                     # JSON 형식 추출
-                    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                    json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                     if json_match:
                         result = json.loads(json_match.group(0))
                         if result.get('city') and result.get('district'):
@@ -575,9 +575,9 @@ class QueryProcessor:
                         model="gemini-2.0-flash-lite",
                         contents=prompt
                     )
-                    
+                    print('5. response', response.text)
                     try:
-                        json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                        json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                         if json_match:
                             result = json.loads(json_match.group(0))
                             if result.get('city') and result.get('district'):
@@ -623,7 +623,7 @@ class QueryProcessor:
                 )
                 
                 try:
-                    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                    json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                     if json_match:
                         result = json.loads(json_match.group(0))
                         if result.get('city') and result.get('district'):
