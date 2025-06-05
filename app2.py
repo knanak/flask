@@ -63,13 +63,13 @@ except Exception as e:
 # Namespace 정보
 NAMESPACE_INFO = {
     'seoul_job': '서울특별시 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'seoul_culture': '서울특별시 문화, 교육, 여가 프로그램 관련 데이터', 
+    'seoul_culture': '서울특별시 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'seoul_facility': '서울특별시 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'kk_job': '경기도 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'kk_culture': '경기도 문화, 교육, 여가 프로그램 관련 데이터', 
+    'kk_culture': '경기도 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'kk_facility': '경기도 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'ich_job': '인천 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'ich_culture': '인천 문화, 교육, 여가 프로그램 관련 데이터',
+    'ich_culture': '인천 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'ich_facility': '인천 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'public_health_center' : '서울특별시 보건소, 인천광역시 보건소, 경기도 보건소'
 }
@@ -263,7 +263,7 @@ class QueryProcessor:
                 return result
             except (json.JSONDecodeError, AttributeError):
                 # If that fails, try to extract JSON from the text
-                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                 if json_match:
                     try:
                         result = json.loads(json_match.group(0))
@@ -462,10 +462,26 @@ class QueryProcessor:
         
         if dong_matches and self.gemini_client:
             dong_name = dong_matches[0]
+            print(f"동 이름 발견: {dong_name}")
+            
             try:
                 prompt = f"""
-    다음 동(洞) 이름이 한국의 어느 행정구역에 속하는지 알려주세요.
+    다음 동(洞) 이름이 한국의 어느 지역에 속하는지 정확히 알려주세요.
     동 이름: {dong_name}
+
+    주요 동 이름과 소속 지역:
+    - 지제동: 경기도 평택시
+    - 역삼동: 서울특별시 강남구
+    - 송도동: 인천광역시 연수구
+    - 정자동: 경기도 성남시
+    - 신촌동: 서울특별시 서대문구
+    - 구월동: 인천광역시 남동구
+    - 부평동: 인천광역시 부평구
+    - 장안동: 서울특별시 동대문구
+    - 행신동: 경기도 고양시
+    - 호매실동: 경기도 수원시
+
+    위 정보를 참고하여 {dong_name}이(가) 속한 지역을 찾아주세요.
 
     ### 가능한 행정구역:
     서울특별시: {", ".join([d for d in all_districts if district_to_city[d] == "서울특별시"])}
@@ -479,33 +495,118 @@ class QueryProcessor:
     ### 예시:
     - 송도동 → {{"city": "인천광역시", "district": "연수구"}}
     - 삼성동 → {{"city": "서울특별시", "district": "강남구"}}
-    - 정자동 → {{"city": "경기도", "district": "성남시"}}
+    - 지제동 → {{"city": "경기도", "district": "평택시"}}
     """
                 response = self.gemini_client.models.generate_content(
                     model="gemini-2.0-flash-lite",
                     contents=prompt
                 )
-                
+                print('5. response', response.text)
                 try:
-                    result = json.loads(response.text)
-                    if result.get('city') and result.get('district'):
-                        city = result['city']
-                        district = result['district']
-                        if district in all_districts:
-                            print(f"'{dong_name}'이(가) 속한 지역: {city} {district}")
-                            return f"{city} {district}"
-                except:
-                    pass
-                    
+                    # JSON 형식 추출
+                    json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
+                    if json_match:
+                        result = json.loads(json_match.group(0))
+                        if result.get('city') and result.get('district'):
+                            city = result['city']
+                            district = result['district']
+                            if district in all_districts:
+                                print(f"LLM이 '{dong_name}'이(가) 속한 지역을 찾음: {city} {district}")
+                                return f"{city} {district}"
+                            else:
+                                print(f"LLM이 찾은 '{district}'는 등록된 지역이 아닙니다.")
+                except Exception as e:
+                    print(f"LLM 응답 파싱 오류: {str(e)}")
+                        
             except Exception as e:
                 print(f"동 이름으로 지역 추출 중 오류 발생: {str(e)}")
         
-        # 5. LLM을 통한 일반적인 지역 추출
+        # 5. 지역명 패턴이 없는 경우 (호매실, 정자역 등) LLM으로 분석
+        if self.gemini_client:
+            try:
+                # 쿼리에서 가능한 지역명 추출
+                location_words = []
+                words = query.split()
+                
+                for word in words:
+                    # 너무 짧은 단어는 제외 (2글자 이상)
+                    if len(word) >= 2:
+                        # 일반적인 검색어는 제외
+                        exclude_words = ['일자리', '복지', '프로그램', '문화', '센터', '시설', '병원', '학교', '마트']
+                        if not any(exclude in word for exclude in exclude_words):
+                            location_words.append(word)
+                
+                if location_words:
+                    print(f"가능한 지역명 후보: {location_words}")
+                    
+                    prompt = f"""
+    다음 단어들 중에서 한국의 지역명을 찾아주세요.
+    단어들: {', '.join(location_words)}
+
+    주요 지역명 예시:
+    - 호매실: 경기도 수원시 권선구의 지역명
+    - 정자: 경기도 성남시 분당구의 지역명  
+    - 판교: 경기도 성남시 분당구의 지역명
+    - 일산: 경기도 고양시의 지역명
+    - 평촌: 경기도 안양시 동안구의 지역명
+    - 산본: 경기도 군포시의 지역명
+    - 중동: 경기도 부천시의 지역명
+    - 상록수: 경기도 안산시 상록구의 지역명
+    - 송도: 인천광역시 연수구의 지역명
+    - 청라: 인천광역시 서구의 지역명
+
+    위 정보를 참고하여 지역명이 속한 행정구역을 찾아주세요.
+
+    ### 가능한 행정구역:
+    서울특별시: {", ".join([d for d in all_districts if district_to_city[d] == "서울특별시"])}
+    경기도: {", ".join([d for d in all_districts if district_to_city[d] == "경기도"])}
+    인천광역시: {", ".join([d for d in all_districts if district_to_city[d] == "인천광역시"])}
+
+    ### 응답 형식:
+    JSON 형식으로 응답해주세요: {{"location": "지역명", "city": "도시명", "district": "구/시/군명"}}
+    지역을 찾을 수 없으면: {{"location": null, "city": null, "district": null}}
+
+    ### 예시:
+    - 호매실 → {{"location": "호매실", "city": "경기도", "district": "수원시"}}
+    - 정자 → {{"location": "정자", "city": "경기도", "district": "성남시"}}
+    - 송도 → {{"location": "송도", "city": "인천광역시", "district": "연수구"}}
+    """
+                    response = self.gemini_client.models.generate_content(
+                        model="gemini-2.0-flash-lite",
+                        contents=prompt
+                    )
+                    print('5. response', response.text)
+                    try:
+                        json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
+                        if json_match:
+                            result = json.loads(json_match.group(0))
+                            if result.get('city') and result.get('district'):
+                                city = result['city']
+                                district = result['district']
+                                location = result.get('location', '')
+                                
+                                if district in all_districts:
+                                    print(f"LLM이 '{location}' 지역을 찾음: {city} {district}")
+                                    return f"{city} {district}"
+                                else:
+                                    print(f"LLM이 찾은 '{district}'는 등록된 지역이 아닙니다.")
+                    except Exception as e:
+                        print(f"LLM 응답 파싱 오류: {str(e)}")
+                            
+            except Exception as e:
+                print(f"LLM 지역 추출 중 오류 발생: {str(e)}")
+        
+        # 6. 마지막으로 전체 쿼리를 LLM에 전달하여 지역 추출 시도
         if self.gemini_client:
             try:
                 prompt = f"""
-    다음 질문에서 한국의 행정구역(시/군/구) 이름을 추출해주세요.
+    다음 질문에서 한국의 지역명을 추출해주세요.
     질문: {query}
+
+    일반적인 지역명 패턴:
+    1. XX시, XX구, XX군, XX동 형태
+    2. 지역 이름만 (예: 호매실, 정자, 판교, 일산, 평촌)
+    3. 역 이름 (예: 강남역, 홍대입구역) - 역 이름에서 지역 추출
 
     ### 가능한 행정구역:
     서울특별시: {", ".join([d for d in all_districts if district_to_city[d] == "서울특별시"])}
@@ -522,13 +623,15 @@ class QueryProcessor:
                 )
                 
                 try:
-                    result = json.loads(response.text)
-                    if result.get('city') and result.get('district'):
-                        city = result['city']
-                        district = result['district']
-                        if district in all_districts:
-                            print(f"LLM으로 지역 추출: {city} {district}")
-                            return f"{city} {district}"
+                    json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
+                    if json_match:
+                        result = json.loads(json_match.group(0))
+                        if result.get('city') and result.get('district'):
+                            city = result['city']
+                            district = result['district']
+                            if district in all_districts:
+                                print(f"LLM으로 지역 추출: {city} {district}")
+                                return f"{city} {district}"
                 except:
                     pass
                     
@@ -537,8 +640,8 @@ class QueryProcessor:
         
         # 지역을 찾지 못한 경우
         print("쿼리에서 지역을 찾을 수 없음")
-        return None
-            
+        return None 
+
 
     def _extract_seoul_district(self, query):
         """
@@ -1398,10 +1501,6 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
 
 # QueryProcessor 인스턴스 생성
 query_processor = QueryProcessor(gemini_client, pc, dense_index_name)
-
-# /query 엔드포인트의 public_health_center 처리 부분 수정
-# 기존 result 처리 부분을 수정하여 search_pinecone의 결과를 그대로 사용
-
 @app.route('/query', methods=['POST'])
 def query_endpoint():
     try:

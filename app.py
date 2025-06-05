@@ -1409,18 +1409,22 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
     def process_query(self, query, user_city=None, user_district=None):
         """
         Process a user query through the complete pipeline:
-        1. Select the most appropriate namespace
-        2. Based on the namespace, either:
-        - Query Pinecone if a specific namespace is selected
-        - Use Gemini LLM for a direct response if no namespace matches
-        
-        Args:
-            query: 사용자 질문
-            user_city: 사용자 도시
-            user_district: 사용자 구/시/군
+        1. Extract location from query first
+        2. Select namespace based on both query content AND extracted location
+        3. Query Pinecone or use LLM based on namespace
         """
-        # Step 1: Select namespace
-        namespace_result = self.select_namespace(query)
+        
+        # Step 1: 쿼리에서 지역 정보를 먼저 추출
+        extracted_location = self._extract_unified_district(query)
+        
+        # Step 2: 추출된 지역 정보를 기반으로 네임스페이스 선택
+        if extracted_location:
+            # 지역이 추출된 경우, 해당 지역에 맞는 네임스페이스 선택
+            namespace_result = self.select_namespace_with_location(query, extracted_location)
+        else:
+            # 지역이 추출되지 않은 경우, 기존 방식대로 네임스페이스 선택
+            namespace_result = self.select_namespace(query)
+        
         selected_namespace = namespace_result.get('namespace')
         confidence = namespace_result.get('confidence', 0)
         reasoning = namespace_result.get('reasoning', 'No reasoning provided')
@@ -1430,17 +1434,20 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
             "namespace_selection": {
                 "selected": selected_namespace,
                 "confidence": confidence,
-                "reasoning": reasoning
+                "reasoning": reasoning,
+                "extracted_location": extracted_location
             }
         }
         
         # UTF-8 안전 출력
         try:
             print(f"Selected namespace: {selected_namespace}, confidence: {confidence}")
+            if extracted_location:
+                print(f"Extracted location: {extracted_location}")
         except UnicodeEncodeError:
             print("Selected namespace: [encoding error]")
         
-        # Step 2: Process based on namespace selection
+        # Step 3: Process based on namespace selection
         if selected_namespace is None:
             # If no appropriate namespace, use LLM to respond directly
             try:
@@ -1499,6 +1506,92 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
             return response
 
 
+    def select_namespace_with_location(self, query, extracted_location):
+        """
+        추출된 지역 정보를 고려하여 네임스페이스를 선택합니다.
+        """
+        # 지역 정보에서 도시 추출
+        if "서울특별시" in extracted_location:
+            city_prefix = "seoul"
+        elif "경기도" in extracted_location:
+            city_prefix = "kk"
+        elif "인천광역시" in extracted_location:
+            city_prefix = "ich"
+        else:
+            # 지역을 알 수 없는 경우 기존 방식으로 처리
+            return self.select_namespace(query)
+        
+        # 쿼리에서 카테고리 추출을 위해 Gemini 사용
+        if self.gemini_client is None:
+            return {
+                "namespace": None,
+                "confidence": 0,
+                "reasoning": "Gemini client is not initialized"
+            }
+        
+        prompt = f"""
+        사용자가 "{extracted_location}"에서 "{query}"에 대해 검색하고 있습니다.
+        
+        이 검색이 다음 중 어떤 카테고리에 해당하는지 판단해주세요:
+        1. job (일자리, 채용, 고용)
+        2. culture (문화, 교육, 강좌, 프로그램)
+        3. facility (시설, 복지관, 요양원)
+        
+        ### 응답 형식:
+        JSON 형식으로 응답해주세요.
+        예시: {{"category": "culture", "confidence": 0.95, "reasoning": "문화 프로그램을 찾고 있음"}}
+        """
+        
+        try:
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            
+            # Parse the JSON response
+            try:
+                result = json.loads(response.text)
+                category = result.get('category')
+                
+                if category:
+                    # 도시 prefix와 카테고리를 조합하여 네임스페이스 생성
+                    namespace = f"{city_prefix}_{category}"
+                    
+                    # 네임스페이스가 유효한지 확인
+                    if namespace in NAMESPACE_INFO:
+                        return {
+                            "namespace": namespace,
+                            "confidence": result.get('confidence', 0.8),
+                            "reasoning": f"{extracted_location}의 {category} 정보를 검색합니다."
+                        }
+                        
+            except json.JSONDecodeError:
+                # JSON 파싱 실패 시 텍스트에서 카테고리 추출 시도
+                response_text = response.text.lower()
+                if "job" in response_text or "일자리" in response_text:
+                    category = "job"
+                elif "culture" in response_text or "문화" in response_text:
+                    category = "culture"
+                elif "facility" in response_text or "시설" in response_text:
+                    category = "facility"
+                else:
+                    category = None
+                
+                if category:
+                    namespace = f"{city_prefix}_{category}"
+                    if namespace in NAMESPACE_INFO:
+                        return {
+                            "namespace": namespace,
+                            "confidence": 0.7,
+                            "reasoning": f"{extracted_location}의 {category} 정보를 검색합니다."
+                        }
+        
+        except Exception as e:
+            print(f"네임스페이스 선택 중 오류: {str(e)}")
+        
+        # 실패한 경우 기존 방식으로 처리
+        return self.select_namespace(query)
+
 # QueryProcessor 인스턴스 생성
 query_processor = QueryProcessor(gemini_client, pc, dense_index_name)
 @app.route('/query', methods=['POST'])
@@ -1532,18 +1625,23 @@ def query_endpoint():
                     "score": 0.95,
                     "title": "테스트 제목",
                     "category": "테스트 카테고리",
-                    "content": "API 클라이언트 초기화에 실패했지만 테스트 모드로 실행 중입니다."
+                    "content": "API 클라이언트 초기화에 실패했지만 테스트 모드로 실행 중입니다. | nameSpace: LLM"
                 }]
             })
         
         # QueryProcessor를 통해 쿼리 처리 - 사용자 위치 정보 전달
         result = query_processor.process_query(query, user_city, user_district)
         
+        # namespace 결정 - debug 정보에서 가져오기
+        selected_namespace = None
+        if "debug" in result and "namespace_selection" in result["debug"]:
+            selected_namespace = result["debug"]["namespace_selection"].get("selected")
+        
+        # namespace가 None인 경우 "LLM"으로 설정
+        final_namespace = "LLM" if selected_namespace is None else selected_namespace
+        
         # public_health_center 네임스페이스인 경우 특별 처리
-        if result.get("namespace") == "public_health_center" or (
-            "debug" in result and 
-            result["debug"].get("namespace_selection", {}).get("selected") == "public_health_center"
-        ):
+        if selected_namespace == "public_health_center":
             # search_pinecone의 결과를 이미 받았으므로, 그 결과를 사용
             if result["source"] == "pinecone" and result["status"] == "success":
                 results = []
@@ -1578,7 +1676,7 @@ def query_endpoint():
                         return jsonify({
                             "query": query,
                             "results": results,
-                            "namespace": "public_health_center",
+                            "namespace": final_namespace,
                             "location_filter": target_district if "search_info" in result else "",
                             "message": location_info
                         })
@@ -1597,7 +1695,7 @@ def query_endpoint():
                                 "category": target_district,
                                 "content": f"{target_district} 지역의 보건소 정보를 찾을 수 없습니다. 인근 지역 보건소를 방문하시거나 지역 보건소에 직접 문의해주세요."
                             }],
-                            "namespace": "public_health_center",
+                            "namespace": final_namespace,
                             "location_filter": target_district
                         })
                 
@@ -1610,9 +1708,9 @@ def query_endpoint():
                             "score": 0,
                             "title": "검색 오류",
                             "category": "오류",
-                            "content": result.get("error", "보건소 정보 검색 중 오류가 발생했습니다.")
+                            "content": result.get('error', '보건소 정보 검색 중 오류가 발생했습니다.')
                         }],
-                        "namespace": "public_health_center"
+                        "namespace": final_namespace
                     })
         
         # 기존 결과 처리 로직 (public_health_center가 아닌 경우)
@@ -1626,7 +1724,7 @@ def query_endpoint():
                     "score": 1.0,
                     "title": "AI 응답",
                     "category": "일반 정보",
-                    "content": result.get("response", "응답 없음")
+                    "content": result.get('response', '응답 없음')
                 }]
             }
             
@@ -1639,7 +1737,7 @@ def query_endpoint():
                         "region_type": result["debug"]["search_info"].get("region_type", "unknown")
                     }
                 
-                response_data["namespace"] = result["debug"]["namespace_selection"].get("selected")
+                response_data["namespace"] = final_namespace
                 response_data["confidence"] = result["debug"]["namespace_selection"].get("confidence")
             
             return jsonify(response_data)
@@ -1679,7 +1777,7 @@ def query_endpoint():
                         "region_type": result["debug"]["search_info"].get("region_type", "unknown")
                     }
                 
-                response_data["namespace"] = result["debug"]["namespace_selection"].get("selected")
+                response_data["namespace"] = final_namespace
                 response_data["confidence"] = result["debug"]["namespace_selection"].get("confidence")
             
             return jsonify(response_data)
@@ -1703,7 +1801,6 @@ def query_endpoint():
             "error": str(e),
             "results": []
         }), 500
-
 
 @app.route('/explore', methods=['POST'])
 def explore_endpoint():
