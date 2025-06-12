@@ -63,7 +63,7 @@ except Exception as e:
 # Namespace 정보
 NAMESPACE_INFO = {
     'seoul_job': '서울특별시 고용 정보, 채용 공고, 일자리 관련 데이터',
-    'seoul_culture': '서울특별시시 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
+    'seoul_culture': '서울특별시 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'seoul_facility': '서울특별시 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
     'kk_job': '경기도 고용 정보, 채용 공고, 일자리 관련 데이터',
     'kk_culture': '경기도 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
@@ -199,7 +199,6 @@ class QueryProcessor:
         """
         Select the most appropriate namespace for a user query using Gemini.
         눈 검사 관련 키워드가 포함된 경우 public_health_center 네임스페이스를 우선 선택합니다.
-        교육/프로그램 관련 키워드가 포함된 경우 culture 네임스페이스를 우선 선택합니다.
         """
         # 눈 검사 관련 키워드 체크
         eye_health_keywords = [
@@ -217,50 +216,6 @@ class QueryProcessor:
                     "namespace": "public_health_center",
                     "confidence": 0.95,
                     "reasoning": f"눈/안과 관련 키워드 '{keyword}'가 포함되어 있어 보건소 정보를 제공합니다."
-                }
-        
-        # 교육/프로그램 관련 키워드 체크
-        education_keywords = [
-            '프로그램', '교육', '강좌', '수업', '강의', '학습', '배우기', '배움',
-            '세무', '경제', '금융', '컴퓨터', '스마트폰', '디지털', 'IT',
-            '요리', '미술', '음악', '체육', '운동', '언어', '영어', '중국어',
-            '건강', '웰빙', '취미', '여가', '문화', '예술', '공예', '수공예',
-            '평생교육', '평생학습', '시니어교육', '노인교육', '실버교육',
-            '자격증', '자격과정', '직업교육', '직업훈련'
-        ]
-        
-        # 교육/프로그램 관련 키워드가 포함되어 있는지 확인
-        for keyword in education_keywords:
-            if keyword in query_lower:
-                # 쿼리에서 지역 정보 추출 시도
-                extracted_district = self.extract_district_from_query(query, None)
-                
-                if extracted_district:
-                    # 지역에 따라 적절한 culture 네임스페이스 선택
-                    if "서울" in extracted_district:
-                        return {
-                            "namespace": "seoul_culture",
-                            "confidence": 0.9,
-                            "reasoning": f"'{keyword}' 키워드와 서울 지역이 포함되어 있어 서울 문화/교육 프로그램 정보를 제공합니다."
-                        }
-                    elif "경기" in extracted_district:
-                        return {
-                            "namespace": "kk_culture",
-                            "confidence": 0.9,
-                            "reasoning": f"'{keyword}' 키워드와 경기 지역이 포함되어 있어 경기도 문화/교육 프로그램 정보를 제공합니다."
-                        }
-                    elif "인천" in extracted_district:
-                        return {
-                            "namespace": "ich_culture",
-                            "confidence": 0.9,
-                            "reasoning": f"'{keyword}' 키워드와 인천 지역이 포함되어 있어 인천 문화/교육 프로그램 정보를 제공합니다."
-                        }
-                
-                # 지역을 특정할 수 없는 경우, 사용자 위치 정보를 활용할 수 있도록 culture 관련 네임스페이스임을 표시
-                return {
-                    "namespace": "culture_general",  # 특별한 플래그
-                    "confidence": 0.85,
-                    "reasoning": f"'{keyword}' 키워드가 포함되어 있어 문화/교육 프로그램 정보가 필요합니다. 지역 정보를 기반으로 적절한 네임스페이스를 선택해야 합니다."
                 }
         
         # 기존 Gemini 로직 유지
@@ -281,11 +236,6 @@ class QueryProcessor:
 
     ### 사용자 질문:
     {query}
-
-    ### 중요 지침:
-    - '프로그램', '교육', '강좌', '수업', '세무', '경제' 등의 키워드가 포함된 경우 반드시 해당 지역의 culture 네임스페이스를 선택하세요.
-    - 지역명이 명확히 포함된 경우 해당 지역의 네임스페이스를 선택하세요.
-    - 지역명이 불명확한 경우에도 교육/프로그램 관련이면 culture 관련 네임스페이스를 선택하세요.
 
     ### 응답 형식:
     JSON 형식으로 응답해 주세요. 가장 적합한 namespace 하나와 그 선택에 대한 confidence score(0.0~1.0)를 제공하세요.
@@ -313,7 +263,7 @@ class QueryProcessor:
                 return result
             except (json.JSONDecodeError, AttributeError):
                 # If that fails, try to extract JSON from the text
-                json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                 if json_match:
                     try:
                         result = json.loads(json_match.group(0))
@@ -340,6 +290,7 @@ class QueryProcessor:
                 "reasoning": f"Error calling Gemini API: {str(e)}",
                 "error": str(e)
             }
+
     
     def get_llm_response(self, query):
         """
@@ -550,10 +501,10 @@ class QueryProcessor:
                     model="gemini-2.0-flash-lite",
                     contents=prompt
                 )
-                
+                print('5. response', response.text)
                 try:
                     # JSON 형식 추출
-                    json_match = re.search(r'\{.*\}', response.text, re.DOTALL)
+                    json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
                     if json_match:
                         result = json.loads(json_match.group(0))
                         if result.get('city') and result.get('district'):
@@ -581,7 +532,7 @@ class QueryProcessor:
                     # 너무 짧은 단어는 제외 (2글자 이상)
                     if len(word) >= 2:
                         # 일반적인 검색어는 제외
-                        exclude_words = ['일자리', '복지', '프로그램', '문화', '센터', '시설', '병원', '학교', '마트', '세무']
+                        exclude_words = ['일자리', '복지', '프로그램', '문화', '센터', '시설', '병원', '학교', '마트']
                         if not any(exclude in word for exclude in exclude_words):
                             location_words.append(word)
                 
@@ -593,9 +544,9 @@ class QueryProcessor:
     단어들: {', '.join(location_words)}
 
     주요 지역명 예시:
-    - 호매실: 경기도 수원시의 지역명
-    - 정자: 경기도 성남시의 지역명  
-    - 판교: 경기도 성남시의 지역명
+    - 호매실: 경기도 수원시 권선구의 지역명
+    - 정자: 경기도 성남시 분당구의 지역명  
+    - 판교: 경기도 성남시 분당구의 지역명
     - 일산: 경기도 고양시의 지역명
     - 평촌: 경기도 안양시 동안구의 지역명
     - 산본: 경기도 군포시의 지역명
@@ -612,27 +563,23 @@ class QueryProcessor:
     인천광역시: {", ".join([d for d in all_districts if district_to_city[d] == "인천광역시"])}
 
     ### 응답 형식:
-    반드시 하나의 완전한 JSON 객체만 반환하세요. 다른 텍스트나 설명을 포함하지 마세요.
-    {{"location": "지역명", "city": "도시명", "district": "구/시/군명"}}
+    JSON 형식으로 응답해주세요: {{"location": "지역명", "city": "도시명", "district": "구/시/군명"}}
     지역을 찾을 수 없으면: {{"location": null, "city": null, "district": null}}
+
+    ### 예시:
+    - 호매실 → {{"location": "호매실", "city": "경기도", "district": "수원시"}}
+    - 정자 → {{"location": "정자", "city": "경기도", "district": "성남시"}}
+    - 송도 → {{"location": "송도", "city": "인천광역시", "district": "연수구"}}
     """
                     response = self.gemini_client.models.generate_content(
                         model="gemini-2.0-flash-lite",
                         contents=prompt
                     )
-                    
+                    print('5. response', response.text)
                     try:
-                        # 응답 텍스트 정리 - 공백과 줄바꿈 제거
-                        response_text = response.text.strip()
-                        
-                        # JSON 부분만 추출 (첫 번째 중괄호부터 마지막 중괄호까지)
-                        start_idx = response_text.find('{')
-                        end_idx = response_text.rfind('}')
-                        
-                        if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                            json_str = response_text[start_idx:end_idx+1]
-                            result = json.loads(json_str)
-                            
+                        json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
+                        if json_match:
+                            result = json.loads(json_match.group(0))
                             if result.get('city') and result.get('district'):
                                 city = result['city']
                                 district = result['district']
@@ -643,11 +590,8 @@ class QueryProcessor:
                                     return f"{city} {district}"
                                 else:
                                     print(f"LLM이 찾은 '{district}'는 등록된 지역이 아닙니다.")
-                    except json.JSONDecodeError as e:
-                        print(f"LLM 응답 파싱 오류: {str(e)}")
-                        print(f"원본 응답: {response.text}")
                     except Exception as e:
-                        print(f"예상치 못한 오류: {str(e)}")
+                        print(f"LLM 응답 파싱 오류: {str(e)}")
                             
             except Exception as e:
                 print(f"LLM 지역 추출 중 오류 발생: {str(e)}")
@@ -670,8 +614,7 @@ class QueryProcessor:
     인천광역시: {", ".join([d for d in all_districts if district_to_city[d] == "인천광역시"])}
 
     ### 응답 형식:
-    반드시 하나의 완전한 JSON 객체만 반환하세요. 다른 텍스트나 설명을 포함하지 마세요.
-    {{"city": "도시명", "district": "구/시/군명"}}
+    JSON 형식으로 응답해주세요: {{"city": "도시명", "district": "구/시/군명"}}
     지역을 찾을 수 없으면: {{"city": null, "district": null}}
     """
                 response = self.gemini_client.models.generate_content(
@@ -680,34 +623,24 @@ class QueryProcessor:
                 )
                 
                 try:
-                    # 응답 텍스트 정리
-                    response_text = response.text.strip()
-                    
-                    # JSON 부분만 추출
-                    start_idx = response_text.find('{')
-                    end_idx = response_text.rfind('}')
-                    
-                    if start_idx != -1 and end_idx != -1 and end_idx > start_idx:
-                        json_str = response_text[start_idx:end_idx+1]
-                        result = json.loads(json_str)
-                        
+                    json_match = re.search(r'\{[^}]+\}', response.text, re.DOTALL)
+                    if json_match:
+                        result = json.loads(json_match.group(0))
                         if result.get('city') and result.get('district'):
                             city = result['city']
                             district = result['district']
                             if district in all_districts:
                                 print(f"LLM으로 지역 추출: {city} {district}")
                                 return f"{city} {district}"
-                except json.JSONDecodeError as e:
-                    print(f"최종 LLM 파싱 오류: {str(e)}")
-                except Exception as e:
-                    print(f"예상치 못한 오류: {str(e)}")
+                except:
+                    pass
                     
             except Exception as e:
                 print(f"LLM 지역 추출 중 오류 발생: {str(e)}")
         
         # 지역을 찾지 못한 경우
         print("쿼리에서 지역을 찾을 수 없음")
-        return None
+        return None 
 
 
     def _extract_seoul_district(self, query):
@@ -1599,18 +1532,23 @@ def query_endpoint():
                     "score": 0.95,
                     "title": "테스트 제목",
                     "category": "테스트 카테고리",
-                    "content": "API 클라이언트 초기화에 실패했지만 테스트 모드로 실행 중입니다."
+                    "content": "API 클라이언트 초기화에 실패했지만 테스트 모드로 실행 중입니다. | nameSpace: LLM"
                 }]
             })
         
         # QueryProcessor를 통해 쿼리 처리 - 사용자 위치 정보 전달
         result = query_processor.process_query(query, user_city, user_district)
         
+        # namespace 결정 - debug 정보에서 가져오기
+        selected_namespace = None
+        if "debug" in result and "namespace_selection" in result["debug"]:
+            selected_namespace = result["debug"]["namespace_selection"].get("selected")
+        
+        # namespace가 None인 경우 "LLM"으로 설정
+        final_namespace = "LLM" if selected_namespace is None else selected_namespace
+        
         # public_health_center 네임스페이스인 경우 특별 처리
-        if result.get("namespace") == "public_health_center" or (
-            "debug" in result and 
-            result["debug"].get("namespace_selection", {}).get("selected") == "public_health_center"
-        ):
+        if selected_namespace == "public_health_center":
             # search_pinecone의 결과를 이미 받았으므로, 그 결과를 사용
             if result["source"] == "pinecone" and result["status"] == "success":
                 results = []
@@ -1645,7 +1583,7 @@ def query_endpoint():
                         return jsonify({
                             "query": query,
                             "results": results,
-                            "namespace": "public_health_center",
+                            "namespace": final_namespace,
                             "location_filter": target_district if "search_info" in result else "",
                             "message": location_info
                         })
@@ -1664,7 +1602,7 @@ def query_endpoint():
                                 "category": target_district,
                                 "content": f"{target_district} 지역의 보건소 정보를 찾을 수 없습니다. 인근 지역 보건소를 방문하시거나 지역 보건소에 직접 문의해주세요."
                             }],
-                            "namespace": "public_health_center",
+                            "namespace": final_namespace,
                             "location_filter": target_district
                         })
                 
@@ -1677,9 +1615,9 @@ def query_endpoint():
                             "score": 0,
                             "title": "검색 오류",
                             "category": "오류",
-                            "content": result.get("error", "보건소 정보 검색 중 오류가 발생했습니다.")
+                            "content": result.get('error', '보건소 정보 검색 중 오류가 발생했습니다.')
                         }],
-                        "namespace": "public_health_center"
+                        "namespace": final_namespace
                     })
         
         # 기존 결과 처리 로직 (public_health_center가 아닌 경우)
@@ -1693,7 +1631,7 @@ def query_endpoint():
                     "score": 1.0,
                     "title": "AI 응답",
                     "category": "일반 정보",
-                    "content": result.get("response", "응답 없음")
+                    "content": result.get('response', '응답 없음')
                 }]
             }
             
@@ -1706,7 +1644,7 @@ def query_endpoint():
                         "region_type": result["debug"]["search_info"].get("region_type", "unknown")
                     }
                 
-                response_data["namespace"] = result["debug"]["namespace_selection"].get("selected")
+                response_data["namespace"] = final_namespace
                 response_data["confidence"] = result["debug"]["namespace_selection"].get("confidence")
             
             return jsonify(response_data)
@@ -1746,7 +1684,7 @@ def query_endpoint():
                         "region_type": result["debug"]["search_info"].get("region_type", "unknown")
                     }
                 
-                response_data["namespace"] = result["debug"]["namespace_selection"].get("selected")
+                response_data["namespace"] = final_namespace
                 response_data["confidence"] = result["debug"]["namespace_selection"].get("confidence")
             
             return jsonify(response_data)
@@ -1770,7 +1708,6 @@ def query_endpoint():
             "error": str(e),
             "results": []
         }), 500
-
 
 @app.route('/explore', methods=['POST'])
 def explore_endpoint():
