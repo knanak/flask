@@ -1,0 +1,1 @@
+API 호출 결과가 'api_result.txt' 파일에 저장되었습니다.
