@@ -1894,6 +1894,7 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
 
 # QueryProcessor 인스턴스 생성
 query_processor = QueryProcessor(gemini_client, pc, dense_index_name)
+
 @app.route('/query', methods=['POST'])
 def query_endpoint():
     try:
@@ -1929,6 +1930,137 @@ def query_endpoint():
                 }]
             })
         
+        # 응급안전안심 서비스 확인
+        emergency_keywords = ['응급안전안심', '응급안전', '안심서비스', '독거노인안전', '응급호출']
+        is_emergency_query = any(keyword in query for keyword in emergency_keywords)
+        
+# /query 엔드포인트의 응급안전안심 처리 부분
+        if is_emergency_query:
+            print("응급안전안심 서비스 검색 감지")
+            
+            # 1. QueryProcessor의 _extract_unified_district를 사용하여 위치 추출
+            extracted_location = query_processor._extract_unified_district(query)
+            
+            sido = None
+            sigungu = None
+            
+            if extracted_location:
+                # "서울특별시 성북구" 형태를 분리
+                parts = extracted_location.split()
+                if len(parts) >= 2:
+                    sido = parts[0]
+                    sigungu = parts[1]
+                    print(f"쿼리에서 추출된 위치: {sido} {sigungu}")
+            
+            # 2. 쿼리에서 위치를 찾지 못한 경우 사용자 위치 정보 사용
+            if not sido or not sigungu:
+                if user_city and user_district:
+                    sido = user_city
+                    sigungu = user_district
+                    print(f"사용자 위치 사용: {sido} {sigungu}")
+            
+            # 위치 정보가 없는 경우 에러 반환
+            if not sido or not sigungu:
+                return jsonify({
+                    "query": query,
+                    "results": [{
+                        "id": "error",
+                        "score": 0,
+                        "title": "위치 정보 필요",
+                        "category": "오류",
+                        "content": "응급안전안심서비스 검색을 위해서는 지역 정보가 필요합니다. 예: '성북구 응급안전안심 서비스'"
+                    }],
+                    "namespace": "emergency_service"
+                })
+            
+            # EmergencyServiceHandler 인스턴스 생성 및 API 호출
+            try:
+                from emergency_contact import EmergencyServiceHandler
+                emergency_handler = EmergencyServiceHandler()
+                print("EmergencyServiceHandler 인스턴스 생성 완료")
+                
+                # 응급안전안심 서비스 검색
+                result = emergency_handler.search_emergency_service(sido, sigungu)
+                print(f"API 호출 결과 타입: {type(result)}")
+                
+                # result가 None인지 확인
+                if result is None:
+                    print("ERROR: search_emergency_service가 None을 반환했습니다!")
+                    result = {
+                        "status": "error",
+                        "error": "API 호출 결과가 None입니다.",
+                        "source": "emergency_service"
+                    }
+                else:
+                    print(f"API 호출 결과: {result}")
+                    
+            except Exception as e:
+                print(f"API 호출 중 예외 발생: {str(e)}")
+                import traceback
+                traceback.print_exc()
+                result = {
+                    "status": "error",
+                    "error": f"API 호출 중 오류: {str(e)}",
+                    "source": "emergency_service"
+                }
+            
+            # 결과 포맷팅 - 이제 result는 None이 아님
+            if result.get("status") == "success":
+                if result.get("results") and len(result["results"]) > 0:
+                    # 성공적으로 결과를 받은 경우
+                    formatted_results = []
+                    for idx, item in enumerate(result["results"]):
+                        formatted_result = {
+                            "id": f"emergency-{idx}",
+                            "score": 1.0,
+                            "title": item.get("organNm", "기관명 없음"),
+                            "category": f"{result['location']['sido']} {result['location']['sigungu']}",
+                            "content": 
+                                    f"기관명: {item.get('organNm', '정보 없음')}\n" +
+                                    f"주소: {item.get('organAddr', '정보 없음')}\n" +
+                                    f"전화: {item.get('organTel', '정보 없음')}\n" +
+                                    f"이메일: {item.get('organEmail', '정보 없음')}\n"
+                                    # f"사업유형: {item.get('bzType', '정보 없음')}\n" +
+                                    # f"기관유형: {item.get('organType', '정보 없음')}"
+                        }
+                        formatted_results.append(formatted_result)
+                    
+                    return jsonify({
+                        "query": query,
+                        "results": formatted_results,
+                        "namespace": "emergency_service",
+                        "location_filter": f"{result['location']['sido']} {result['location']['sigungu']}",
+                        "total_count": result.get("total_count", len(formatted_results))
+                    })
+                else:
+                    # 결과가 없는 경우
+                    location_info = result.get('location', {})
+                    return jsonify({
+                        "query": query,
+                        "results": [{
+                            "id": "no-result",
+                            "score": 0,
+                            "title": "검색 결과 없음",
+                            "category": f"{location_info.get('sido', '')} {location_info.get('sigungu', '')}",
+                            "content": result.get("message", "해당 지역에 등록된 응급안전안심서비스 기관이 없습니다.")
+                        }],
+                        "namespace": "emergency_service",
+                        "location_filter": f"{location_info.get('sido', '')} {location_info.get('sigungu', '')}"
+                    })
+            else:
+                # 오류가 발생한 경우
+                return jsonify({
+                    "query": query,
+                    "results": [{
+                        "id": "error",
+                        "score": 0,
+                        "title": "검색 오류",
+                        "category": "오류",
+                        "content": result.get("error", "응급안전안심서비스 검색 중 오류가 발생했습니다.")
+                    }],
+                    "namespace": "emergency_service"
+                })
+        # 응급안전안심이 아닌 경우 기존 로직 실행
         # QueryProcessor를 통해 쿼리 처리 - 사용자 위치 정보 전달
         result = query_processor.process_query(query, user_city, user_district)
         
