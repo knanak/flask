@@ -77,7 +77,8 @@ NAMESPACE_INFO = {
     'kb_job': '경상북도 고용 정보, 채용 공고, 일자리 관련 데이터',
     'kb_culture': '경상북도 문화, 교육, 여가, 평생학습 프로그램 관련 데이터 (세무, 경제, 금융, 컴퓨터, 스마트폰, 건강, 요리, 미술, 음악, 체육, 언어 등 모든 교육 프로그램 포함)', 
     'kb_facility': '경상북도 장기요양기관, 방문요양센터, 복지관, 경로당, 노인교실 관련 데이터',
-    'public_health_center' : '서울특별시 보건소, 인천광역시 보건소, 경기도 보건소'
+    'public_health_center' : '서울특별시 보건소, 인천광역시 보건소, 경기도 보건소',
+    "workout" : '증상별, 부위별 운동 추천'
 }
 
 # 서울시 행정구역 간 인접 정보 (각 구와 인접한 구 목록)
@@ -250,31 +251,304 @@ class QueryProcessor:
         self.pc = pinecone_client
         self.dense_index_name = dense_index_name
         self.dense_index = None if self.pc is None else self.pc.Index(self.dense_index_name)
+
+    def check_location_in_query(self, query):
+        """
+        LLM을 사용하여 쿼리에 지역명이 있는지 판단합니다.
+        """
+        if self.gemini_client is None:
+            return False
+        
+        try:
+            prompt = f"""
+    다음 질문에 한국의 지역명(시/도, 구/군, 동/읍/면 등)이 포함되어 있는지 판단해주세요.
+
+    질문: {query}
+
+    주의사항:
+    - "운동", "문화", "프로그램" 등은 일반 명사이므로 지역명이 아닙니다
+    - "운동동"처럼 실제 지역명인 경우만 지역명으로 인정합니다
+    - 명확한 지역명이 있을 때만 True로 판단하세요
+
+    ### 응답 형식:
+    JSON 형식으로 응답해주세요.
+    예시: {{"has_location": true, "location": "강북구", "reasoning": "강북구라는 명확한 지역명이 있음"}}
+    예시: {{"has_location": false, "location": null, "reasoning": "지역명이 없고 운동 관련 질문만 있음"}}
+    """
+            
+            response = self.gemini_client.models.generate_content(
+                model="gemini-2.0-flash-lite",
+                contents=prompt
+            )
+            
+            try:
+                result = json.loads(response.text)
+                return result.get('has_location', False), result.get('location')
+            except json.JSONDecodeError:
+                # JSON 파싱 실패시 텍스트에서 판단
+                if "true" in response.text.lower() and "has_location" in response.text:
+                    return True, None
+                return False, None
+                
+        except Exception as e:
+            print(f"지역명 유무 판단 중 오류: {str(e)}")
+            return False, None
+
+
+    def extract_workout_category(self, query):
+        """
+        운동 관련 질문에서 카테고리(운동 부위나 목적)를 추출합니다.
+        """
+        # 운동 부위 및 목적 키워드 매핑
+        category_mappings = {
+            # 신체 부위
+            '허리': ['허리', '요추', '척추', '등허리', '허리통증'],
+            '어깨': ['어깨', '견갑골', '승모근', '어깨통증'],
+            '목': ['목', '경추', '목통증', '거북목'],
+            '무릎': ['무릎', '슬개골', '무릎통증', '관절'],
+            '발목': ['발목', '발목통증', '족관절'],
+            '손목': ['손목', '손목통증', '수근관'],
+            '엉덩이': ['엉덩이', '둔부', '고관절', '힙'],
+            '복부': ['복부', '뱃살', '복근', '코어'],
+            '팔': ['팔', '이두근', '삼두근', '상완'],
+            '다리': ['다리', '하체', '종아리', '허벅지'],
+            '가슴': ['가슴', '흉근', '대흉근'],
+            '등': ['등', '광배근', '등근육'],
+            
+            # 운동 목적
+            '다이어트': ['다이어트', '체중감량', '살빼기', '체지방', '감량'],
+            '근력강화': ['근력', '근육', '강화', '벌크업'],
+            '유연성': ['유연성', '스트레칭', '유연', '스트레치'],
+            '균형': ['균형', '밸런스', '평형'],
+            '재활': ['재활', '회복', '치료', '물리치료'],
+            '자세교정': ['자세', '교정', '체형', '정렬'],
+            '체력': ['체력', '지구력', '스태미나', '심폐'],
+            '통증완화': ['통증', '완화', '진통', '아픔']
+        }
+        
+        query_lower = query.lower()
+        
+        # 각 카테고리에 대해 키워드 매칭
+        for category, keywords in category_mappings.items():
+            for keyword in keywords:
+                if keyword in query_lower:
+                    print(f"운동 카테고리 추출: {category} (키워드: {keyword})")
+                    return category
+        
+        # 카테고리를 찾지 못한 경우 Gemini를 사용하여 추출
+        if self.gemini_client:
+            try:
+                prompt = f"""
+    다음 운동 관련 질문에서 주요 운동 부위나 목적을 추출해주세요.
+    질문: {query}
+
+    가능한 카테고리:
+    신체 부위: 허리, 어깨, 목, 무릎, 발목, 손목, 엉덩이, 복부, 팔, 다리, 가슴, 등
+    운동 목적: 다이어트, 근력강화, 유연성, 균형, 재활, 자세교정, 체력, 통증완화
+
+    위 카테고리 중 하나만 선택해서 답변해주세요. 
+    만약 정확히 일치하는 카테고리가 없다면 가장 관련있는 것을 선택하세요.
+    카테고리 이름만 답변해주세요.
+    """
+                response = self.gemini_client.models.generate_content(
+                    model="gemini-2.0-flash-lite",
+                    contents=prompt
+                )
+                
+                extracted_category = response.text.strip()
+                if extracted_category in category_mappings.keys():
+                    print(f"Gemini로 추출한 운동 카테고리: {extracted_category}")
+                    return extracted_category
+                    
+            except Exception as e:
+                print(f"운동 카테고리 추출 중 오류: {str(e)}")
+        
+        return None
+
+
+    def search_workout_videos(self, query, top_k=10):
+        """
+        운동 관련 비디오를 검색합니다.
+        """
+        if self.dense_index is None:
+            return {
+                "source": "pinecone",
+                "namespace": "workout",
+                "results": None,
+                "status": "error",
+                "error": "Pinecone index is not initialized"
+            }
+        
+        try:
+            # 1. 카테고리 추출
+            category = self.extract_workout_category(query)
+            
+            # 2. 카테고리가 있으면 필터로 검색
+            if category:
+                print(f"카테고리 '{category}'로 운동 영상 검색...")
+                
+                search_params = {
+                    "inputs": {"text": query},
+                    "top_k": top_k,
+                    "filter": {"Category": category}
+                }
+                
+                # 검색 실행
+                try:
+                    search_result = self.dense_index.search(
+                        namespace="workout",
+                        query=search_params,
+                        fields=["Title", "Category", "Url"],
+                        rerank={
+                            "model": "bge-reranker-v2-m3",
+                            "top_n": 8,
+                            "rank_fields": ["Title"]
+                        },
+                    )
+                except Exception as rerank_error:
+                    if "maximum token limit" in str(rerank_error):
+                        print("토큰 제한 초과. rerank 없이 재시도...")
+                        search_result = self.dense_index.search(
+                            namespace="workout",
+                            query=search_params,
+                            fields=["Title", "Category", "Url"]
+                        )
+                    else:
+                        raise rerank_error
+                
+                # 결과 확인
+                if search_result and 'result' in search_result and 'hits' in search_result['result']:
+                    hits = search_result['result']['hits']
+                    
+                    # 결과가 없으면 Title 검색으로 전환
+                    if len(hits) == 0:
+                        print(f"카테고리 '{category}'에 해당하는 결과가 없습니다. Title 검색으로 전환...")
+                        return self._search_workout_by_title(query, top_k)
+                    
+                    print(f"카테고리 검색 결과: {len(hits)}개 운동 영상 발견")
+                    return {
+                        "source": "pinecone",
+                        "namespace": "workout",
+                        "results": {"result": {"hits": hits}},
+                        "status": "success",
+                        "search_info": {
+                            "category": category,
+                            "search_type": "category_filter"
+                        }
+                    }
+            
+            # 3. 카테고리가 없으면 바로 Title 검색
+            else:
+                print("카테고리를 추출할 수 없어 Title 검색을 수행합니다...")
+                return self._search_workout_by_title(query, top_k)
+                
+        except Exception as e:
+            print(f"운동 영상 검색 중 오류: {str(e)}")
+            return {
+                "source": "pinecone",
+                "namespace": "workout",
+                "results": None,
+                "status": "error",
+                "error": str(e)
+            }
+
+
+    def _search_workout_by_title(self, query, top_k=10):
+        """
+        Title 필드에서 운동 영상을 검색합니다.
+        """
+        try:
+            # Gemini를 사용하여 검색 키워드 최적화
+            if self.gemini_client:
+                try:
+                    prompt = f"""
+    다음 운동 관련 질문에 대해 검색할 키워드를 추출해주세요.
+    질문: {query}
+
+    운동 영상 제목에서 찾을 수 있는 핵심 키워드 2-3개를 공백으로 구분해서 제공해주세요.
+    예시: "허리 스트레칭 통증"
+    """
+                    response = self.gemini_client.models.generate_content(
+                        model="gemini-2.0-flash-lite",
+                        contents=prompt
+                    )
+                    
+                    optimized_query = response.text.strip()
+                    print(f"최적화된 검색어: {optimized_query}")
+                except:
+                    optimized_query = query
+            else:
+                optimized_query = query
+            
+            # Title 검색을 위한 파라미터
+            search_params = {
+                "inputs": {"text": optimized_query},
+                "top_k": top_k
+            }
+            
+            # 검색 실행
+            try:
+                search_result = self.dense_index.search(
+                    namespace="workout",
+                    query=search_params,
+                    fields=["Title", "Category", "Url"],
+                    rerank={
+                        "model": "bge-reranker-v2-m3",
+                        "top_n": 8,
+                        "rank_fields": ["Title"]
+                    },
+                )
+            except Exception as rerank_error:
+                if "maximum token limit" in str(rerank_error):
+                    print("토큰 제한 초과. rerank 없이 재시도...")
+                    search_result = self.dense_index.search(
+                        namespace="workout",
+                        query=search_params,
+                        fields=["Title", "Category", "Url"]
+                    )
+                else:
+                    raise rerank_error
+            
+            if search_result and 'result' in search_result and 'hits' in search_result['result']:
+                hits = search_result['result']['hits']
+                print(f"Title 검색 결과: {len(hits)}개 운동 영상 발견")
+                
+                return {
+                    "source": "pinecone",
+                    "namespace": "workout",
+                    "results": {"result": {"hits": hits}},
+                    "status": "success",
+                    "search_info": {
+                        "search_type": "title_search",
+                        "optimized_query": optimized_query
+                    }
+                }
+            
+            return {
+                "source": "pinecone",
+                "namespace": "workout",
+                "results": {"result": {"hits": []}},
+                "status": "success",
+                "search_info": {
+                    "search_type": "title_search",
+                    "message": "검색 결과가 없습니다."
+                }
+            }
+            
+        except Exception as e:
+            print(f"Title 검색 중 오류: {str(e)}")
+            return {
+                "source": "pinecone",
+                "namespace": "workout",
+                "results": None,
+                "status": "error",
+                "error": str(e)
+            }
         
     def select_namespace(self, query, namespace_info=NAMESPACE_INFO):
         """
-        Select the most appropriate namespace for a user query using Gemini.
-        눈 검사 관련 키워드가 포함된 경우 public_health_center 네임스페이스를 우선 선택합니다.
+        지역명이 포함된 쿼리에 대해 Gemini를 사용하여 namespace를 선택합니다.
         """
-        # 눈 검사 관련 키워드 체크
-        eye_health_keywords = [
-            '눈 검사', '안검사', '눈 질환', '시력검사', '안과검진', '눈검진',
-            '백내장', '녹내장', '황반변성', '안질환', '시력', '안과',
-            '노인 안검진', '개안수술', '눈 수술', '눈 건강', '안구건조증',
-            '노안', '눈치료', '안압검사', '망막검사', '각막검사'
-        ]
-        
-        # 쿼리에 눈 검사 관련 키워드가 포함되어 있는지 확인
-        query_lower = query.lower()
-        for keyword in eye_health_keywords:
-            if keyword in query_lower:
-                return {
-                    "namespace": "public_health_center",
-                    "confidence": 0.95,
-                    "reasoning": f"눈/안과 관련 키워드 '{keyword}'가 포함되어 있어 보건소 정보를 제공합니다."
-                }
-        
-        # 기존 Gemini 로직 유지
         if self.gemini_client is None:
             return {
                 "namespace": None,
@@ -1307,8 +1581,11 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
     def search_pinecone(self, query, namespace, top_k=10, rerank_top_n=8, user_city=None, user_district=None):
         """
         Search Pinecone vector database using the specified namespace.
-        토큰 제한을 고려하여 rerank를 처리합니다.
         """
+        # workout 네임스페이스인 경우 특별 처리 (지역 정보 불필요)
+        if namespace == "workout":
+            return self.search_workout_videos(query, top_k)
+        
         if self.dense_index is None:
             return {
                 "source": "pinecone",
@@ -1317,15 +1594,11 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
                 "status": "error",
                 "error": "Pinecone index is not initialized"
             }
-            
+        
         try:
-            # UTF-8 인코딩으로 안전한 출력
-            try:
-                print(f"Searching Pinecone with namespace: {namespace}")
-            except UnicodeEncodeError:
-                print("Searching Pinecone with namespace: [encoding error]")
+            print(f"Searching Pinecone with namespace: {namespace}")
             
-            # 1. 쿼리에서 지역명 추출 (모든 네임스페이스에 대해 통합 방식 사용)
+            # workout이 아닌 경우에만 지역 추출
             target_district_full = self.extract_district_from_query(query, namespace)
             
             # 2. 쿼리에서 지역을 찾지 못했고, 사용자 위치 정보가 있는 경우
@@ -1381,6 +1654,9 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
                 print(f"추출된 지역: {target_district if target_district else 'None (전체 검색)'}")
             except UnicodeEncodeError:
                 print("추출된 지역: [encoding error]")
+
+            if namespace == "workout":
+                return self.search_workout_videos(query, top_k)
             
             # public_health_center의 경우 특별 처리
             if namespace == "public_health_center":
@@ -1705,62 +1981,62 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
     def process_query(self, query, user_city=None, user_district=None):
         """
         Process a user query through the complete pipeline:
-        1. Extract location from query first
-        2. Select namespace based on both query content AND extracted location
+        1. Check if query contains location
+        2. Select namespace based on location presence and query content
         3. Query Pinecone or use LLM based on namespace
         """
         
-        # Step 1: 쿼리에서 지역 정보를 먼저 추출
-        extracted_location = self._extract_unified_district(query)
+        # Step 1: 쿼리에 지역명이 있는지 먼저 판단
+        has_location, detected_location = self.check_location_in_query(query)
         
-        # Step 2: 추출된 지역 정보를 기반으로 네임스페이스 선택
-        if extracted_location:
-            # 지역이 추출된 경우, 해당 지역에 맞는 네임스페이스 선택
-            namespace_result = self.select_namespace_with_location(query, extracted_location)
+        print(f"지역명 포함 여부: {has_location}")
+        if detected_location:
+            print(f"감지된 지역: {detected_location}")
+        
+        # Step 2: 지역명 유무에 따라 다른 처리
+        if has_location:
+            # 지역명이 있는 경우 - 지역 추출 후 지역 기반 namespace 선택
+            extracted_location = self._extract_unified_district(query)
+            
+            if extracted_location:
+                # 지역 기반 namespace 선택
+                namespace_result = self.select_namespace_with_location(query, extracted_location)
+            else:
+                # 지역을 추출하지 못한 경우 일반 namespace 선택
+                namespace_result = self.select_namespace(query)
         else:
-            # 지역이 추출되지 않은 경우, 기존 방식대로 네임스페이스 선택
-            namespace_result = self.select_namespace(query)
+            # 지역명이 없는 경우 - 키워드 기반 namespace 선택
+            namespace_result = self.select_namespace_without_location(query)
+            extracted_location = None
         
         selected_namespace = namespace_result.get('namespace')
         confidence = namespace_result.get('confidence', 0)
         reasoning = namespace_result.get('reasoning', 'No reasoning provided')
         
-        # Debug info for namespace selection
+        # Debug info
         debug_info = {
             "namespace_selection": {
                 "selected": selected_namespace,
                 "confidence": confidence,
                 "reasoning": reasoning,
+                "has_location": has_location,
                 "extracted_location": extracted_location
             }
         }
         
-        # UTF-8 안전 출력
-        try:
-            print(f"Selected namespace: {selected_namespace}, confidence: {confidence}")
-            if extracted_location:
-                print(f"Extracted location: {extracted_location}")
-        except UnicodeEncodeError:
-            print("Selected namespace: [encoding error]")
+        print(f"Selected namespace: {selected_namespace}, confidence: {confidence}")
         
         # Step 3: Process based on namespace selection
         if selected_namespace is None:
-            # If no appropriate namespace, use LLM to respond directly
-            try:
-                print("No appropriate namespace found, using LLM directly")
-            except UnicodeEncodeError:
-                print("No appropriate namespace found, using LLM directly")
+            # No appropriate namespace, use LLM
+            print("No appropriate namespace found, using LLM directly")
             response = self.get_llm_response(query)
             response["debug"] = debug_info
             return response
         else:
-            # If namespace selected, query Pinecone with the exact namespace string
-            try:
-                print(f"Using namespace '{selected_namespace}' for Pinecone search")
-            except UnicodeEncodeError:
-                print("Using namespace for Pinecone search")
+            # Query Pinecone
+            print(f"Using namespace '{selected_namespace}' for Pinecone search")
             
-            # search_pinecone에 사용자 위치 정보 전달
             response = self.search_pinecone(
                 query=query, 
                 namespace=selected_namespace,
@@ -1769,40 +2045,26 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
             )
             response["debug"] = debug_info
             
-            # 검색 정보 추가
-            if "search_info" in response:
-                debug_info["search_info"] = response["search_info"]
-                response["debug"] = debug_info
-            
-            # 결과 구조 확인 및 결과가 있는지 검사
+            # 결과 확인 및 처리 (기존 코드)
             has_results = False
             if response["status"] == "success" and response.get("results"):
-                # 응답 구조 분석
                 if "result" in response["results"] and "hits" in response["results"]["result"]:
                     hits = response["results"]["result"]["hits"]
                     if hits and len(hits) > 0:
                         has_results = True
             
-            # 결과가 없는 경우 LLM으로 대체
             if not has_results:
-                try:
-                    print("Pinecone search returned no usable results, falling back to LLM")
-                except UnicodeEncodeError:
-                    print("Pinecone search returned no usable results, falling back to LLM")
+                print("Pinecone search returned no usable results, falling back to LLM")
                 llm_response = self.get_llm_response(query)
                 llm_response["debug"] = debug_info
-                
-                # 검색 정보 추가
-                if "search_info" in response:
-                    llm_response["debug"]["search_info"] = response["search_info"]
-                
                 llm_response["debug"]["pinecone_error"] = "No usable results found"
                 return llm_response
             
             return response
 
-
     def select_namespace_with_location(self, query, extracted_location):
+
+        
         """
         추출된 지역 정보를 고려하여 네임스페이스를 선택합니다.
         """
@@ -1820,14 +2082,16 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
         else:
             # 지역을 알 수 없는 경우 기존 방식으로 처리
             return self.select_namespace(query)
-        
-        # 쿼리에서 카테고리 추출을 위해 Gemini 사용
+
+            # 쿼리에서 카테고리 추출을 위해 Gemini 사용
         if self.gemini_client is None:
             return {
                 "namespace": None,
                 "confidence": 0,
                 "reasoning": "Gemini client is not initialized"
             }
+        
+
         
         prompt = f"""
         사용자가 "{extracted_location}"에서 "{query}"에 대해 검색하고 있습니다.
@@ -1891,6 +2155,96 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
         
         # 실패한 경우 기존 방식으로 처리
         return self.select_namespace(query)
+    
+    def select_namespace_without_location(self, query):
+        """
+        지역명이 없는 쿼리에 대해 적절한 namespace를 선택합니다.
+        """
+        query_lower = query.lower()
+        
+        # 운동 관련 키워드 체크
+        workout_keywords = [
+            '운동', '스트레칭', '요가', '필라테스', '홈트', '홈트레이닝',
+            '통증', '재활', '물리치료', '자세교정', '코어',
+            '다이어트', '체중감량', '체지방', '근육', '체력',
+            '허리', '어깨', '목', '무릎', '발목', '손목',
+            '운동법', '운동방법', '운동추천', '운동영상'
+        ]
+        
+        for keyword in workout_keywords:
+            if keyword in query_lower:
+                return {
+                    "namespace": "workout",
+                    "confidence": 0.95,
+                    "reasoning": f"운동 관련 키워드 '{keyword}'가 포함되어 있어 운동 영상을 검색합니다."
+                }
+        
+        # # 눈 검사 관련 키워드 체크 (지역명이 없어도 보건소 정보가 필요할 수 있음)
+        # eye_health_keywords = [
+        #     '눈 검사', '안검사', '눈 질환', '시력검사', '안과검진', '눈검진',
+        #     '백내장', '녹내장', '황반변성', '안질환', '시력', '안과'
+        # ]
+        
+        # for keyword in eye_health_keywords:
+        #     if keyword in query_lower:
+        #         # 사용자 위치 정보가 있으면 활용
+        #         return {
+        #             "namespace": "public_health_center",
+        #             "confidence": 0.85,
+        #             "reasoning": f"눈/안과 관련 키워드 '{keyword}'가 포함되어 있습니다. 사용자 위치 기반으로 보건소를 검색합니다."
+        #         }
+        
+        # 기타 경우 LLM으로 처리
+        return {
+            "namespace": None,
+            "confidence": 0,
+            "reasoning": "특정 카테고리에 해당하지 않아 LLM으로 응답합니다."
+        }
+
+    def extract_youtube_video_id(self, url):
+        """
+        YouTube URL에서 비디오 ID를 추출합니다.
+        """
+        if not url:
+            return None
+        
+        # 다양한 YouTube URL 형식 처리
+        patterns = [
+            r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
+            r'youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})',
+        ]
+        
+        for pattern in patterns:
+            match = re.search(pattern, url)
+            if match:
+                return match.group(1)
+        
+        return None
+
+    def get_youtube_thumbnail_url(self, video_id, quality='hq'):
+        """
+        YouTube 비디오 ID로부터 썸네일 URL을 생성합니다.
+        
+        Args:
+            video_id: YouTube 비디오 ID
+            quality: 썸네일 품질 ('maxres', 'hq', 'mq', 'sd', 'default')
+        
+        Returns:
+            썸네일 URL
+        """
+        if not video_id:
+            return None
+        
+        quality_map = {
+            'maxres': 'maxresdefault',  # 1280x720
+            'hq': 'hqdefault',          # 480x360
+            'mq': 'mqdefault',          # 320x180
+            'sd': 'sddefault',          # 640x480
+            'default': 'default'         # 120x90
+        }
+        
+        quality_suffix = quality_map.get(quality, 'hqdefault')
+        return f"https://img.youtube.com/vi/{video_id}/{quality_suffix}.jpg"
 
 # QueryProcessor 인스턴스 생성
 query_processor = QueryProcessor(gemini_client, pc, dense_index_name)
@@ -1930,8 +2284,47 @@ def query_endpoint():
                 }]
             })
         
+        # 체육 시설 이용료 소득 공제 확인
+        sports_deduction_keywords = [
+            ['체육', '시설', '소득', '공제'],
+            ['운동', '시설', '소득', '공제'],
+            ['스포츠', '시설', '소득', '공제'],
+            ['체육', '이용료', '공제'],
+            ['운동', '이용료', '공제'],
+            ['헬스장', '소득', '공제'],
+            ['헬스장', '세금', '공제'],
+            ['체육시설', '세금', '공제'],
+            ['운동', '세금', '공제'],
+            ['피트니스', '소득', '공제'],
+            ['체육시설', '소득공제'],
+            ['운동시설', '소득공제']
+        ]
+        
+        # 각 키워드 조합이 모두 포함되어 있는지 확인
+        is_sports_deduction_query = False
+        for keyword_set in sports_deduction_keywords:
+            if all(keyword in query for keyword in keyword_set):
+                is_sports_deduction_query = True
+                break
+        
+        # 체육 시설 소득 공제 관련 질문인 경우 즉시 응답
+        if is_sports_deduction_query:
+            print("체육 시설 이용료 소득 공제 관련 질문 감지")
+            return jsonify({
+                "query": query,
+                "results": [{
+                    "id": "sports-deduction-info",
+                    "score": 1.0,
+                    "title": "체육시설 이용료 소득공제 안내",
+                    "category": "체육시설 소득공제",
+                    "content": "💪 소득 공제되는 체육시설 확인해보세요![SPORTS_DEDUCTION_URL]https://www.culture.go.kr/deduction/search/list.do#none[/SPORTS_DEDUCTION_URL]"
+                }],
+                "namespace": "LLM",
+                "Query_Category": "체육시설 소득공제"
+            })
+
         # 응급안전안심 서비스 확인
-        emergency_keywords = ['응급안전안심', '응급안전', '안심서비스', '독거노인안전', '응급호출']
+        emergency_keywords = ['응급안전안심', '응급안전', '안심서비스', '독거노인안전', '응급호출', '응급 안전 안심']
         is_emergency_query = any(keyword in query for keyword in emergency_keywords)
         
 # /query 엔드포인트의 응급안전안심 처리 부분
@@ -2144,6 +2537,64 @@ def query_endpoint():
                         }],
                         "namespace": final_namespace
                     })
+                
+        # /query 엔드포인트의 workout namespace 처리 부분
+        elif selected_namespace == "workout":
+            # workout 네임스페이스인 경우 특별 처리
+            if result["source"] == "pinecone" and result["status"] == "success":
+                results = []
+                
+                if result.get("results") and "result" in result["results"]:
+                    hits = result["results"]["result"].get("hits", [])
+                    
+                    if hits:
+                        for hit in hits:
+                            item = {
+                                "id": hit.get('_id', ''),
+                                "score": hit.get('_score', 0),
+                            }
+                            
+                            if 'fields' in hit:
+                                fields = hit['fields']
+                                url = fields.get('Url', '')
+                                
+                                # YouTube 비디오 ID 추출 및 썸네일 URL 생성
+                                video_id = query_processor.extract_youtube_video_id(url)
+                                thumbnail_url = None
+                                if video_id:
+                                    thumbnail_url = query_processor.get_youtube_thumbnail_url(video_id, 'hq')
+                                
+                                item["title"] = fields.get('Title', 'N/A')
+                                item["category"] = fields.get('Category', 'N/A')
+                                item["url"] = url
+                                item["video_id"] = video_id
+                                item["thumbnail_url"] = thumbnail_url
+                                item["content"] = f"카테고리: {fields.get('Category', 'N/A')} | 영상 URL: {url}"
+                            
+                            results.append(item)
+                        
+                        search_info = result.get("search_info", {})
+                        return jsonify({
+                            "query": query,
+                            "results": results,
+                            "namespace": final_namespace,
+                            "search_type": search_info.get("search_type", "unknown"),
+                            "category": search_info.get("category", "")
+                        })
+                    else:
+                        return jsonify({
+                            "query": query,
+                            "results": [{
+                                "id": "no-result",
+                                "score": 0,
+                                "title": "검색 결과 없음",
+                                "category": "",
+                                "content": "해당하는 운동 영상을 찾을 수 없습니다. 다른 검색어로 시도해보세요.",
+                                "url": "",
+                                "thumbnail_url": None
+                            }],
+                            "namespace": final_namespace
+                        })
         
         # 기존 결과 처리 로직 (public_health_center가 아닌 경우)
         # 결과 형식화 및 반환

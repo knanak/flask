@@ -2201,51 +2201,6 @@ JSON 형식으로 응답해 주세요. 선택한 구·군 이름만 배열로 �
             "reasoning": "특정 카테고리에 해당하지 않아 LLM으로 응답합니다."
         }
 
-    def extract_youtube_video_id(self, url):
-        """
-        YouTube URL에서 비디오 ID를 추출합니다.
-        """
-        if not url:
-            return None
-        
-        # 다양한 YouTube URL 형식 처리
-        patterns = [
-            r'(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})',
-            r'youtube\.com\/watch\?.*v=([a-zA-Z0-9_-]{11})',
-        ]
-        
-        for pattern in patterns:
-            match = re.search(pattern, url)
-            if match:
-                return match.group(1)
-        
-        return None
-
-    def get_youtube_thumbnail_url(self, video_id, quality='hq'):
-        """
-        YouTube 비디오 ID로부터 썸네일 URL을 생성합니다.
-        
-        Args:
-            video_id: YouTube 비디오 ID
-            quality: 썸네일 품질 ('maxres', 'hq', 'mq', 'sd', 'default')
-        
-        Returns:
-            썸네일 URL
-        """
-        if not video_id:
-            return None
-        
-        quality_map = {
-            'maxres': 'maxresdefault',  # 1280x720
-            'hq': 'hqdefault',          # 480x360
-            'mq': 'mqdefault',          # 320x180
-            'sd': 'sddefault',          # 640x480
-            'default': 'default'         # 120x90
-        }
-        
-        quality_suffix = quality_map.get(quality, 'hqdefault')
-        return f"https://img.youtube.com/vi/{video_id}/{quality_suffix}.jpg"
-
 # QueryProcessor 인스턴스 생성
 query_processor = QueryProcessor(gemini_client, pc, dense_index_name)
 
@@ -2284,47 +2239,8 @@ def query_endpoint():
                 }]
             })
         
-        # 체육 시설 이용료 소득 공제 확인
-        sports_deduction_keywords = [
-            ['체육', '시설', '소득', '공제'],
-            ['운동', '시설', '소득', '공제'],
-            ['스포츠', '시설', '소득', '공제'],
-            ['체육', '이용료', '공제'],
-            ['운동', '이용료', '공제'],
-            ['헬스장', '소득', '공제'],
-            ['헬스장', '세금', '공제'],
-            ['체육시설', '세금', '공제'],
-            ['운동', '세금', '공제'],
-            ['피트니스', '소득', '공제'],
-            ['체육시설', '소득공제'],
-            ['운동시설', '소득공제']
-        ]
-        
-        # 각 키워드 조합이 모두 포함되어 있는지 확인
-        is_sports_deduction_query = False
-        for keyword_set in sports_deduction_keywords:
-            if all(keyword in query for keyword in keyword_set):
-                is_sports_deduction_query = True
-                break
-        
-        # 체육 시설 소득 공제 관련 질문인 경우 즉시 응답
-        if is_sports_deduction_query:
-            print("체육 시설 이용료 소득 공제 관련 질문 감지")
-            return jsonify({
-                "query": query,
-                "results": [{
-                    "id": "sports-deduction-info",
-                    "score": 1.0,
-                    "title": "체육시설 이용료 소득공제 안내",
-                    "category": "체육시설 소득공제",
-                    "content": "💪 소득 공제되는 체육시설 확인해보세요![SPORTS_DEDUCTION_URL]https://www.culture.go.kr/deduction/search/list.do#none[/SPORTS_DEDUCTION_URL]"
-                }],
-                "namespace": "LLM",
-                "Query_Category": "체육시설 소득공제"
-            })
-
         # 응급안전안심 서비스 확인
-        emergency_keywords = ['응급안전안심', '응급안전', '안심서비스', '독거노인안전', '응급호출', '응급 안전 안심']
+        emergency_keywords = ['응급안전안심', '응급안전', '안심서비스', '독거노인안전', '응급호출']
         is_emergency_query = any(keyword in query for keyword in emergency_keywords)
         
 # /query 엔드포인트의 응급안전안심 처리 부분
@@ -2538,7 +2454,7 @@ def query_endpoint():
                         "namespace": final_namespace
                     })
                 
-        # /query 엔드포인트의 workout namespace 처리 부분
+        # /query 엔드포인트의 결과 처리 부분에 추가
         elif selected_namespace == "workout":
             # workout 네임스페이스인 경우 특별 처리
             if result["source"] == "pinecone" and result["status"] == "success":
@@ -2556,20 +2472,10 @@ def query_endpoint():
                             
                             if 'fields' in hit:
                                 fields = hit['fields']
-                                url = fields.get('Url', '')
-                                
-                                # YouTube 비디오 ID 추출 및 썸네일 URL 생성
-                                video_id = query_processor.extract_youtube_video_id(url)
-                                thumbnail_url = None
-                                if video_id:
-                                    thumbnail_url = query_processor.get_youtube_thumbnail_url(video_id, 'hq')
-                                
                                 item["title"] = fields.get('Title', 'N/A')
                                 item["category"] = fields.get('Category', 'N/A')
-                                item["url"] = url
-                                item["video_id"] = video_id
-                                item["thumbnail_url"] = thumbnail_url
-                                item["content"] = f"카테고리: {fields.get('Category', 'N/A')} | 영상 URL: {url}"
+                                item["url"] = fields.get('Url', 'N/A')
+                                item["content"] = f"카테고리: {fields.get('Category', 'N/A')} | 영상 URL: {fields.get('Url', 'N/A')}"
                             
                             results.append(item)
                         
@@ -2589,9 +2495,7 @@ def query_endpoint():
                                 "score": 0,
                                 "title": "검색 결과 없음",
                                 "category": "",
-                                "content": "해당하는 운동 영상을 찾을 수 없습니다. 다른 검색어로 시도해보세요.",
-                                "url": "",
-                                "thumbnail_url": None
+                                "content": "해당하는 운동 영상을 찾을 수 없습니다. 다른 검색어로 시도해보세요."
                             }],
                             "namespace": final_namespace
                         })
